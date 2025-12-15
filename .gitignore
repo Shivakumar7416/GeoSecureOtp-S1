@@ -1,0 +1,17 @@
+# root
+node_modules/
+package-lock.json
+package.json
+
+# backend
+geosecure-node-demo/node_modules/
+geosecure-node-demo/*.db
+geosecure-node-demo/.env
+
+# frontend
+geosecure-client/node_modules/
+
+# common
+.env
+*.log
+*.db
