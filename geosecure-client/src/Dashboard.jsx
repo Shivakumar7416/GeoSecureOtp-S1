@@ -1,291 +1,257 @@
-// src/DashboardMui.jsx
 import React, { useEffect, useState } from "react";
+import AdminGeoBoundary from "./AdminGeoBoundary";
+import { authedFetch, clearToken } from "./auth";
+import { API_BASE } from "./config";
+import AdminCreateUser from "./AdminCreateUser";
+
 import {
   Box,
   AppBar,
   Toolbar,
-  IconButton,
   Typography,
+  IconButton,
   Avatar,
   Paper,
-  Tooltip,
   Divider,
-  Table,
-  TableHead,
-  TableBody,
-  TableRow,
-  TableCell,
-  TableContainer,
-  TablePagination,
+  Button,
   CircularProgress,
-  Snackbar,
-  Alert,
+  Stack,
+  Fade,
+  Slide,
 } from "@mui/material";
 
-import RefreshIcon from "@mui/icons-material/Refresh";
 import LogoutIcon from "@mui/icons-material/Logout";
-import DownloadIcon from "@mui/icons-material/Download";
-import LinkIcon from "@mui/icons-material/Link";
-import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import RefreshIcon from "@mui/icons-material/Refresh";
+import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import PersonIcon from "@mui/icons-material/Person";
-
-import { authedFetch, clearToken } from "./auth";
-import { API_BASE } from "./config";
 
 export default function Dashboard({ onLogout }) {
   const [profile, setProfile] = useState(null);
-  const [files, setFiles] = useState([]);
-  const [loadingProfile, setLoadingProfile] = useState(true);
-  const [loadingFiles, setLoadingFiles] = useState(true);
-  const [snack, setSnack] = useState({ open: false, severity: "info", message: "" });
-  const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(8);
-
-  // Fetch profile
-  async function fetchProfile() {
-    try {
-      const res = await authedFetch(`${API_BASE}/profile`);
-      if (!res.ok) {
-        clearToken();
-        onLogout();
-        return;
-      }
-      const data = await res.json();
-      setProfile(data);
-    } catch {
-      setSnack({ open: true, severity: "error", message: "Failed to load profile" });
-    } finally {
-      setLoadingProfile(false);
-    }
-  }
-
-  // Fetch files
-  async function fetchFiles() {
-    try {
-      const res = await authedFetch(`${API_BASE}/files`);
-      if (!res.ok) {
-        setSnack({ open: true, severity: "error", message: "Failed to load files" });
-        return;
-      }
-      const data = await res.json();
-      setFiles(Array.isArray(data) ? data : []);
-    } catch {
-      setSnack({ open: true, severity: "error", message: "Failed to load files" });
-    } finally {
-      setLoadingFiles(false);
-    }
-  }
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    fetchProfile();
-    fetchFiles();
+    let alive = true;
+
+    async function loadProfile() {
+      try {
+        const res = await authedFetch(`${API_BASE}/profile`);
+        if (!res || !res.ok || !res.json) throw new Error();
+        if (alive) setProfile(res.json);
+      } catch {
+        if (alive) {
+          setError("Session expired. Please login again.");
+          clearToken();
+        }
+      } finally {
+        if (alive) setLoading(false);
+      }
+    }
+
+    loadProfile();
+    return () => (alive = false);
   }, []);
 
-  // Download file
-  async function handleDownload(file) {
-    try {
-      const res = await authedFetch(`${API_BASE}/files/${file.id}/download`);
-      if (!res.ok) {
-        setSnack({ open: true, severity: "error", message: "Download failed" });
-        return;
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = file.filename || "file";
-      a.click();
-      URL.revokeObjectURL(url);
-      setSnack({ open: true, severity: "success", message: "Download started" });
-    } catch {
-      setSnack({ open: true, severity: "error", message: "Download error" });
-    }
-  }
-
-  // View file
-  function handleView(file) {
-    const url = file.url || `${API_BASE}/files/${file.id}/view`;
-    window.open(url, "_blank");
-  }
-
-  // Copy link
-  function handleCopy(file) {
-    const url = file.url || `${API_BASE}/files/${file.id}/view`;
-    navigator.clipboard.writeText(url).then(() =>
-      setSnack({ open: true, severity: "success", message: "Link copied" })
+  /* ---------- STATES ---------- */
+  if (loading) {
+    return (
+      <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center", bgcolor: "#0f172a" }}>
+        <CircularProgress />
+      </Box>
     );
   }
 
-  // Refresh
-  function handleRefresh() {
-    fetchProfile();
-    fetchFiles();
-    setSnack({ open: true, severity: "info", message: "Refreshed" });
+  if (error || !profile) {
+    return (
+      <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center", bgcolor: "#0f172a" }}>
+        <Fade in>
+          <Paper sx={{ p: 4, borderRadius: 3 }}>
+            <Typography sx={{ mb: 2 }}>{error}</Typography>
+            <Button variant="contained" onClick={() => { clearToken(); onLogout(); }}>
+              Login again
+            </Button>
+          </Paper>
+        </Fade>
+      </Box>
+    );
   }
 
-  // Logout
-  function handleLogout() {
-    clearToken();
-    onLogout();
-  }
+  const isAdmin = profile.role === "admin";
 
-  // Pagination
-  const displayed = files.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
-
+  /* ---------- UI ---------- */
   return (
-    <Box sx={{ width: "100%", minHeight: "100vh", bgcolor: "#f8fafc" }}>
-      {/* TOP NAVBAR */}
-      <AppBar position="static" color="transparent" elevation={0} sx={{ borderBottom: "1px solid #eee" }}>
-        <Toolbar sx={{ maxWidth: 1200, mx: "auto", width: "100%" }}>
-          <Typography variant="h6" sx={{ fontWeight: 700, flexGrow: 1, color: "#0f172a" }}>
-            User Dashboard
-          </Typography>
+    <Fade in timeout={600}>
+      <Box sx={{ minHeight: "100vh", bgcolor: "#f1f5f9" }}>
+        {/* TOP BAR */}
+        <AppBar
+          position="static"
+          elevation={0}
+          sx={{
+            bgcolor: "#020617",
+            borderBottom: "1px solid #1e293b",
+          }}
+        >
+          <Toolbar sx={{ maxWidth: 1280, mx: "auto", width: "100%" }}>
+            <Typography sx={{ flexGrow: 1, fontWeight: 700, color: "#e5e7eb" }}>
+              GeoSecureOTP
+            </Typography>
 
-          <Tooltip title="Refresh">
-            <IconButton onClick={handleRefresh} size="large">
+            <IconButton
+              sx={{
+                color: "#94a3b8",
+                transition: "0.2s",
+                "&:hover": { color: "#38bdf8", transform: "rotate(90deg)" },
+              }}
+            >
               <RefreshIcon />
             </IconButton>
-          </Tooltip>
 
-          <Tooltip title="Logout">
-            <IconButton onClick={handleLogout} size="large">
+            <IconButton
+              sx={{
+                color: "#94a3b8",
+                transition: "0.2s",
+                "&:hover": { color: "#ef4444" },
+              }}
+              onClick={() => {
+                clearToken();
+                onLogout();
+              }}
+            >
               <LogoutIcon />
             </IconButton>
-          </Tooltip>
 
-          <Avatar
-            sx={{
-              ml: 2,
-              bgcolor: "#fff",
-              border: "2px solid #2563eb",
-              color: "#2563eb",
-            }}
-          >
-            {profile?.email?.charAt(0).toUpperCase() || <PersonIcon />}
-          </Avatar>
-        </Toolbar>
-      </AppBar>
+            <Avatar
+              sx={{
+                ml: 2,
+                bgcolor: isAdmin ? "#2563eb" : "#64748b",
+                transition: "0.3s",
+                "&:hover": { transform: "scale(1.1)" },
+              }}
+            >
+              {isAdmin ? <AdminPanelSettingsIcon /> : <PersonIcon />}
+            </Avatar>
+          </Toolbar>
+        </AppBar>
 
-      {/* PROFILE SECTION UNDER TOP BAR */}
-      <Box sx={{ maxWidth: 1200, mx: "auto", mt: 3, px: 2 }}>
-        <Paper sx={{ p: 3, borderRadius: 2, mb: 3 }}>
-          {loadingProfile ? (
-            <Typography>Loading profile...</Typography>
-          ) : (
-            <>
-              <Typography sx={{ fontWeight: 700, fontSize: "1.1rem" }}>
-                {profile?.name || profile?.email || "User"}
+        {/* CONTENT */}
+        <Box sx={{ maxWidth: 1280, mx: "auto", mt: 4, px: 2 }}>
+          {/* PROFILE */}
+          <Slide in direction="up" timeout={500}>
+            <Paper
+              sx={{
+                p: 3,
+                borderRadius: 4,
+                mb: 3,
+                backdropFilter: "blur(10px)",
+                transition: "0.3s",
+                "&:hover": {
+                  transform: "translateY(-4px)",
+                  boxShadow: "0 20px 40px rgba(0,0,0,0.12)",
+                },
+              }}
+            >
+              <Stack direction="row" spacing={2} alignItems="center">
+                <Avatar
+                  sx={{
+                    bgcolor: isAdmin ? "#2563eb" : "#64748b",
+                    width: 48,
+                    height: 48,
+                  }}
+                >
+                  {isAdmin ? <AdminPanelSettingsIcon /> : <PersonIcon />}
+                </Avatar>
+
+                <Box>
+                  <Typography sx={{ fontWeight: 700 }}>
+                    {profile.email}
+                  </Typography>
+                  <Typography sx={{ color: "#475569", fontSize: 14 }}>
+                    {isAdmin ? "Administrator Access" : "Standard User"}
+                  </Typography>
+                </Box>
+              </Stack>
+            </Paper>
+          </Slide>
+
+          {/* ADMIN */}
+{isAdmin && (
+  <Slide in direction="up" timeout={650}>
+    <Stack spacing={3}>
+      {/* CREATE USER */}
+      <Paper
+        sx={{
+          p: 3,
+          borderRadius: 4,
+          transition: "0.3s",
+          "&:hover": {
+            transform: "translateY(-4px)",
+            boxShadow: "0 20px 40px rgba(0,0,0,0.12)",
+          },
+        }}
+      >
+        <Typography sx={{ fontWeight: 700, mb: 1 }}>
+          User Management
+        </Typography>
+        <Typography sx={{ color: "#64748b", fontSize: 14, mb: 2 }}>
+          Create and manage user accounts
+        </Typography>
+        <Divider sx={{ mb: 3 }} />
+        <AdminCreateUser />
+      </Paper>
+
+      {/* GEO BOUNDARY */}
+      <Paper
+        sx={{
+          p: 3,
+          borderRadius: 4,
+          transition: "0.3s",
+          "&:hover": {
+            transform: "translateY(-4px)",
+            boxShadow: "0 20px 40px rgba(0,0,0,0.12)",
+          },
+        }}
+      >
+        <Typography sx={{ fontWeight: 700, mb: 1 }}>
+          Access Control
+        </Typography>
+        <Typography sx={{ color: "#64748b", fontSize: 14, mb: 2 }}>
+          Configure geographic access rules
+        </Typography>
+        <Divider sx={{ mb: 3 }} />
+        <AdminGeoBoundary />
+      </Paper>
+    </Stack>
+  </Slide>
+)}
+
+
+          {/* FILES */}
+          <Slide in direction="up" timeout={800}>
+            <Paper
+              sx={{
+                p: 3,
+                borderRadius: 4,
+                transition: "0.3s",
+                "&:hover": {
+                  transform: "translateY(-4px)",
+                  boxShadow: "0 20px 40px rgba(0,0,0,0.12)",
+                },
+              }}
+            >
+              <Typography sx={{ fontWeight: 700, mb: 1 }}>
+                Secure Files
               </Typography>
-              <Typography sx={{ color: "#475569" }}>
-                {profile?.email}
+              <Typography sx={{ color: "#64748b", fontSize: 14 }}>
+                Files visible based on your access
               </Typography>
-              <Typography sx={{ color: "#2563eb", mt: 1 }}>
-                Role: <b>{profile?.role || "Member"}</b>
+              <Divider sx={{ my: 2 }} />
+              <Typography sx={{ color: "#94a3b8" }}>
+                No files available.
               </Typography>
-            </>
-          )}
-        </Paper>
-
-        {/* FILES SECTION */}
-        <Paper sx={{ p: 3, borderRadius: 2 }}>
-          <Typography variant="h6" sx={{ fontWeight: 700, mb: 2 }}>
-            Your Files
-          </Typography>
-
-          <Divider sx={{ mb: 2 }} />
-
-          <TableContainer sx={{ maxHeight: 480 }}>
-            <Table stickyHeader>
-              <TableHead>
-                <TableRow>
-                  <TableCell>Filename</TableCell>
-                  <TableCell>Uploaded</TableCell>
-                  <TableCell>Size</TableCell>
-                  <TableCell align="right">Actions</TableCell>
-                </TableRow>
-              </TableHead>
-
-              <TableBody>
-                {loadingFiles ? (
-                  <TableRow>
-                    <TableCell colSpan={4} align="center" sx={{ py: 6 }}>
-                      <CircularProgress />
-                    </TableCell>
-                  </TableRow>
-                ) : files.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={4} align="center" sx={{ py: 6 }}>
-                      No files available.
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  displayed.map((file) => (
-                    <TableRow key={file.id}>
-                      <TableCell>{file.filename}</TableCell>
-                      <TableCell>{new Date(file.uploadedAt).toLocaleString()}</TableCell>
-                      <TableCell>{humanFileSize(file.size)}</TableCell>
-                      <TableCell align="right">
-                        <Box sx={{ display: "flex", gap: 1, justifyContent: "flex-end" }}>
-                          <Tooltip title="Download">
-                            <IconButton size="small" onClick={() => handleDownload(file)}>
-                              <DownloadIcon />
-                            </IconButton>
-                          </Tooltip>
-
-                          <Tooltip title="View">
-                            <IconButton size="small" onClick={() => handleView(file)}>
-                              <LinkIcon />
-                            </IconButton>
-                          </Tooltip>
-
-                          <Tooltip title="Copy link">
-                            <IconButton size="small" onClick={() => handleCopy(file)}>
-                              <ContentCopyIcon />
-                            </IconButton>
-                          </Tooltip>
-                        </Box>
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </TableContainer>
-
-          <TablePagination
-            component="div"
-            count={files.length}
-            page={page}
-            rowsPerPage={rowsPerPage}
-            onPageChange={(e, p) => setPage(p)}
-            onRowsPerPageChange={(e) => {
-              setRowsPerPage(parseInt(e.target.value, 10));
-              setPage(0);
-            }}
-            rowsPerPageOptions={[5, 8, 12]}
-          />
-        </Paper>
+            </Paper>
+          </Slide>
+        </Box>
       </Box>
-
-      {/* Snackbar */}
-      <Snackbar open={snack.open} autoHideDuration={3500} onClose={() => setSnack({ ...snack, open: false })}>
-        <Alert severity={snack.severity} sx={{ width: "100%" }}>
-          {snack.message}
-        </Alert>
-      </Snackbar>
-    </Box>
+    </Fade>
   );
-}
-
-function humanFileSize(bytes) {
-  if (!bytes) return "0 B";
-  const thresh = 1000;
-  if (bytes < thresh) return bytes + " B";
-  const units = ["KB", "MB", "GB", "TB"];
-  let u = -1;
-  do {
-    bytes /= thresh;
-    ++u;
-  } while (bytes >= thresh && u < units.length - 1);
-  return bytes.toFixed(1) + " " + units[u];
 }
