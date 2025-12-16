@@ -1,6 +1,8 @@
 // ============================================================================
-// GeoSecureOTP - Complete Node.js Backend
+// GeoSecureOTP - Complete Node.js Backend (FIXED)
 // ============================================================================
+const multer = require("multer");
+const path = require("path");
 
 console.log(">>> Starting GeoSecureOTP Server (debug mode)...");
 
@@ -15,6 +17,14 @@ const sqlite3 = require("sqlite3").verbose();
 const jwt = require("jsonwebtoken");
 const path = require("path");
 const multer = require("multer");
+const storage = multer.diskStorage({
+  destination: "uploads/",
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + "_" + file.originalname);
+  }
+});
+
+const upload = multer({ storage });
 
 // --------------------------------------------------------------------------
 // Environment Variables
@@ -23,6 +33,13 @@ const PORT = 4000;
 const GMAIL_EMAIL = process.env.GMAIL_EMAIL;
 const GMAIL_APP_PASS = process.env.GMAIL_APP_PASS;
 const JWT_SECRET = process.env.JWT_SECRET || "temp_jwt_secret";
+
+// Access Levels
+const ACCESS = {
+  LOW: 1,
+  HIGH: 2,
+  ADMIN: 3,
+};
 
 // --------------------------------------------------------------------------
 // Validate ENV
@@ -60,7 +77,7 @@ db.serialize(() => {
   db.run(`
     CREATE TABLE IF NOT EXISTS users (
       email TEXT PRIMARY KEY,
-      role TEXT,
+      access_level INTEGER DEFAULT 1,
       created_at INTEGER
     )
   `);
@@ -93,6 +110,18 @@ db.serialize(() => {
       active INTEGER DEFAULT 1
     )
   `);
+
+  db.run(`
+CREATE TABLE IF NOT EXISTS files (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  filename TEXT,
+  stored_name TEXT,
+  uploaded_by TEXT,
+  min_access_level INTEGER,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)
+`);
+
 });
 
 // --------------------------------------------------------------------------
@@ -119,6 +148,14 @@ function authMiddleware(req, res, next) {
   }
 }
 
+// Access-level middleware
+function requireLevel(level) {
+  return (req, res, next) => {
+    if (req.user.accessLevel >= level) next();
+    else res.status(403).json({ error: "access-denied" });
+  };
+}
+
 // --------------------------------------------------------------------------
 // OTP Helpers
 // --------------------------------------------------------------------------
@@ -136,7 +173,7 @@ function hashOtp(otp, salt) {
 app.post("/send-otp", (req, res) => {
   const email = (req.body.email || "").trim().toLowerCase();
 
-  db.get("SELECT * FROM users WHERE email = ?", [email], async (err, user) => {
+  db.get("SELECT * FROM users WHERE email=?", [email], async (err, user) => {
     if (!user) return res.json({ error: "email-not-registered" });
 
     const otp = generateOtp();
@@ -164,64 +201,41 @@ app.post("/send-otp", (req, res) => {
 });
 
 // --------------------------------------------------------------------------
-// VERIFY OTP
+// VERIFY OTP (FIXED)
 // --------------------------------------------------------------------------
 app.post("/verify-otp", (req, res) => {
   const email = req.body.email.toLowerCase();
   const otp = req.body.otp;
 
   db.get(
-    "SELECT * FROM otps WHERE email=? ORDER BY created_at DESC LIMIT 1",
+    "SELECT rowid,* FROM otps WHERE email=? ORDER BY created_at DESC LIMIT 1",
     [email],
     (err, row) => {
-      if (!row) return res.json({ error: "no-otp" });
-      if (row.used || Date.now() > row.expires_at) return res.json({ error: "expired" });
+      if (!row || row.used || Date.now() > row.expires_at) {
+        return res.json({ error: "otp-invalid" });
+      }
 
       if (hashOtp(otp, row.salt) !== row.hash) {
         return res.json({ error: "wrong-otp" });
       }
 
-      db.run("UPDATE otps SET used=1 WHERE email=?", [email]);
-      const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: "2h" });
-      res.json({ success: true, token });
-    }
-  );
-});
+      // mark ONLY this OTP as used
+      db.run("UPDATE otps SET used=1 WHERE rowid=?", [row.rowid]);
 
-// --------------------------------------------------------------------------
-// PROFILE
-// --------------------------------------------------------------------------
-app.get("/profile", authMiddleware, (req, res) => {
-  db.get(
-    "SELECT email, role FROM users WHERE email=?",
-    [req.user.email],
-    (err, row) => {
-      if (!row) return res.status(404).json({ error: "not-found" });
-      res.json(row);
-    }
-  );
-});
+      // fetch access level
+      db.get(
+        "SELECT access_level FROM users WHERE email=?",
+        [email],
+        (err, user) => {
+          if (!user) return res.status(404).json({ error: "user-not-found" });
 
-// --------------------------------------------------------------------------
-// ADMIN - CREATE USER
-// --------------------------------------------------------------------------
-app.post("/admin/create-user", authMiddleware, (req, res) => {
-  const { email, role } = req.body;
+          const token = jwt.sign(
+            { email, accessLevel: user.access_level },
+            JWT_SECRET,
+            { expiresIn: "2h" }
+          );
 
-  db.get(
-    "SELECT role FROM users WHERE email=?",
-    [req.user.email],
-    (err, admin) => {
-      if (!admin || admin.role !== "admin") {
-        return res.status(403).json({ error: "not-admin" });
-      }
-
-      db.run(
-        "INSERT INTO users (email, role, created_at) VALUES (?, ?, ?)",
-        [email.toLowerCase(), role, Date.now()],
-        (err) => {
-          if (err) return res.status(409).json({ error: "exists" });
-          res.json({ success: true });
+          res.json({ success: true, token });
         }
       );
     }
@@ -229,28 +243,54 @@ app.post("/admin/create-user", authMiddleware, (req, res) => {
 });
 
 // --------------------------------------------------------------------------
-// ADMIN - GEO BOUNDARY
+// PROFILE (JWT ONLY)
 // --------------------------------------------------------------------------
-app.post("/admin/set-boundary", authMiddleware, (req, res) => {
-  const { lat, lon, radius } = req.body;
-
-  db.get(
-    "SELECT role FROM users WHERE email=?",
-    [req.user.email],
-    (err, row) => {
-      if (!row || row.role !== "admin") {
-        return res.status(403).json({ error: "not-admin" });
-      }
-
-      db.run("DELETE FROM boundary");
-      db.run(
-        "INSERT INTO boundary (lat, lon, radius) VALUES (?, ?, ?)",
-        [lat, lon, radius],
-        () => res.json({ success: true })
-      );
-    }
-  );
+app.get("/profile", authMiddleware, (req, res) => {
+  res.json({
+    email: req.user.email,
+    accessLevel: req.user.accessLevel,
+  });
 });
+
+// --------------------------------------------------------------------------
+// ADMIN - CREATE USER
+// --------------------------------------------------------------------------
+app.post(
+  "/admin/create-user",
+  authMiddleware,
+  requireLevel(ACCESS.ADMIN),
+  (req, res) => {
+    const { email, accessLevel } = req.body;
+
+    db.run(
+      "INSERT INTO users (email, access_level, created_at) VALUES (?, ?, ?)",
+      [email.toLowerCase(), accessLevel, Date.now()],
+      (err) => {
+        if (err) return res.status(409).json({ error: "exists" });
+        res.json({ success: true });
+      }
+    );
+  }
+);
+
+// --------------------------------------------------------------------------
+// ADMIN - SET GEO BOUNDARY
+// --------------------------------------------------------------------------
+app.post(
+  "/admin/set-boundary",
+  authMiddleware,
+  requireLevel(ACCESS.ADMIN),
+  (req, res) => {
+    const { lat, lon, radius } = req.body;
+
+    db.run("DELETE FROM boundary");
+    db.run(
+      "INSERT INTO boundary (lat, lon, radius) VALUES (?, ?, ?)",
+      [lat, lon, radius],
+      () => res.json({ success: true })
+    );
+  }
+);
 
 // --------------------------------------------------------------------------
 // FILE UPLOAD (ADMIN)
@@ -266,28 +306,19 @@ const upload = multer({
 app.post(
   "/admin/upload-file",
   authMiddleware,
+  requireLevel(ACCESS.ADMIN),
   upload.single("file"),
   (req, res) => {
-    db.get(
-      "SELECT role FROM users WHERE email=?",
-      [req.user.email],
-      (err, row) => {
-        if (!row || row.role !== "admin") {
-          return res.status(403).json({ error: "not-admin" });
-        }
-
-        db.run(
-          "INSERT INTO files (filename, path) VALUES (?, ?)",
-          [req.file.originalname, req.file.filename],
-          () => res.json({ success: true })
-        );
-      }
+    db.run(
+      "INSERT INTO files (filename, path) VALUES (?, ?)",
+      [req.file.originalname, req.file.filename],
+      () => res.json({ success: true })
     );
   }
 );
 
 // --------------------------------------------------------------------------
-// LIST FILES (USER)
+// LIST FILES
 // --------------------------------------------------------------------------
 app.get("/files", authMiddleware, (req, res) => {
   db.all("SELECT id, filename FROM files WHERE active=1", (err, rows) => {
@@ -296,18 +327,23 @@ app.get("/files", authMiddleware, (req, res) => {
 });
 
 // --------------------------------------------------------------------------
-// DOWNLOAD FILE
+// DOWNLOAD FILE (HIGH + ADMIN)
 // --------------------------------------------------------------------------
-app.get("/files/:id/download", authMiddleware, (req, res) => {
-  db.get(
-    "SELECT * FROM files WHERE id=?",
-    [req.params.id],
-    (err, row) => {
-      if (!row) return res.status(404).end();
-      res.download(path.join(__dirname, "uploads", row.path), row.filename);
-    }
-  );
-});
+app.get(
+  "/files/:id/download",
+  authMiddleware,
+  requireLevel(ACCESS.HIGH),
+  (req, res) => {
+    db.get(
+      "SELECT * FROM files WHERE id=?",
+      [req.params.id],
+      (err, row) => {
+        if (!row) return res.status(404).end();
+        res.download(path.join(__dirname, "uploads", row.path), row.filename);
+      }
+    );
+  }
+);
 
 // --------------------------------------------------------------------------
 // START SERVER

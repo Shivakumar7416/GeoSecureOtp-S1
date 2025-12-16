@@ -37,9 +37,20 @@ export default function VerifyOtp({ email, onSuccess }) {
       const data = await res.json();
 
       if (data.success && data.token) {
+        // ✅ Save JWT
         saveToken(data.token);
-        setSnack({ open: true, message: "OTP Verified — Logging in..." });
-        setTimeout(onSuccess, 800); // Smooth redirect delay
+
+        // ✅ Show success message
+        setSnack({
+          open: true,
+          message: "OTP Verified — Logging in...",
+        });
+
+        // ✅ Force reload so new JWT is applied everywhere
+        setTimeout(() => {
+          onSuccess();
+          window.location.reload();
+        }, 800);
       } else {
         setSnack({
           open: true,
@@ -47,7 +58,10 @@ export default function VerifyOtp({ email, onSuccess }) {
         });
       }
     } catch (err) {
-      setSnack({ open: true, message: "Network error: " + err.message });
+      setSnack({
+        open: true,
+        message: "Network error: " + err.message,
+      });
     } finally {
       setLoading(false);
     }
@@ -112,7 +126,6 @@ export default function VerifyOtp({ email, onSuccess }) {
               type="submit"
               variant="contained"
               disabled={loading}
-              startIcon={!loading ? null : null}
               sx={{
                 py: 1.25,
                 mt: 1,
@@ -143,7 +156,7 @@ export default function VerifyOtp({ email, onSuccess }) {
         </Paper>
       </Box>
 
-      {/* Snackbar (Blue) */}
+      {/* Snackbar */}
       <Snackbar
         open={snack.open}
         autoHideDuration={4200}
@@ -164,7 +177,9 @@ export default function VerifyOtp({ email, onSuccess }) {
             borderRadius: 2,
           }}
         >
-          <Typography sx={{ flex: 1, fontSize: 13 }}>{snack.message}</Typography>
+          <Typography sx={{ flex: 1, fontSize: 13 }}>
+            {snack.message}
+          </Typography>
           <IconButton
             size="small"
             onClick={() => setSnack((s) => ({ ...s, open: false }))}

@@ -14,26 +14,35 @@ import {
 
 export default function AdminCreateUser() {
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState("lower");
+  const [accessLevel, setAccessLevel] = useState(1); // default = lower
   const [snack, setSnack] = useState({ open: false, msg: "", type: "success" });
 
   async function handleCreate() {
     const res = await authedFetch(`${API_BASE}/admin/create-user`, {
       method: "POST",
-      body: { email, role },
+      body: { email, accessLevel },
     });
 
     if (res.ok) {
-      setSnack({ open: true, msg: "User created successfully", type: "success" });
+      setSnack({
+        open: true,
+        msg: "User created successfully",
+        type: "success",
+      });
       setEmail("");
+      setAccessLevel(1);
     } else {
-      setSnack({ open: true, msg: "User already exists", type: "error" });
+      setSnack({
+        open: true,
+        msg: "User already exists",
+        type: "error",
+      });
     }
   }
 
   return (
     <Box>
-      <Typography sx={{ fontWeight: 700, mb: 2 }}>
+      <Typography fontWeight={700} mb={2}>
         Create New User
       </Typography>
 
@@ -47,21 +56,18 @@ export default function AdminCreateUser() {
 
       <TextField
         select
-        label="Role"
+        label="User Role"
         fullWidth
-        value={role}
-        onChange={(e) => setRole(e.target.value)}
+        value={accessLevel}
+        onChange={(e) => setAccessLevel(Number(e.target.value))}
         sx={{ mb: 2 }}
       >
-        <MenuItem value="lower">Normal User</MenuItem>
-        <MenuItem value="admin">Admin</MenuItem>
+        <MenuItem value={1}>Lower User</MenuItem>
+        <MenuItem value={2}>Middle User</MenuItem>
+        <MenuItem value={3}>Admin</MenuItem>
       </TextField>
 
-      <Button
-        variant="contained"
-        onClick={handleCreate}
-        sx={{ fontWeight: 700 }}
-      >
+      <Button variant="contained" onClick={handleCreate} sx={{ fontWeight: 700 }}>
         Create User
       </Button>
 

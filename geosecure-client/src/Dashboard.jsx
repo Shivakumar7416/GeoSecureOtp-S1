@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from "react";
 import AdminGeoBoundary from "./AdminGeoBoundary";
+import AdminCreateUser from "./AdminCreateUser";
 import { authedFetch, clearToken } from "./auth";
 import { API_BASE } from "./config";
-import AdminCreateUser from "./AdminCreateUser";
 
 import {
   Box,
@@ -31,31 +31,24 @@ export default function Dashboard({ onLogout }) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    let alive = true;
-
     async function loadProfile() {
       try {
         const res = await authedFetch(`${API_BASE}/profile`);
-        if (!res || !res.ok || !res.json) throw new Error();
-        if (alive) setProfile(res.json);
+        if (!res.ok) throw new Error();
+        setProfile(res.json);
       } catch {
-        if (alive) {
-          setError("Session expired. Please login again.");
-          clearToken();
-        }
+        setError("Session expired. Please login again.");
+        clearToken();
       } finally {
-        if (alive) setLoading(false);
+        setLoading(false);
       }
     }
-
     loadProfile();
-    return () => (alive = false);
   }, []);
 
-  /* ---------- STATES ---------- */
   if (loading) {
     return (
-      <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center", bgcolor: "#0f172a" }}>
+      <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
         <CircularProgress />
       </Box>
     );
@@ -63,55 +56,40 @@ export default function Dashboard({ onLogout }) {
 
   if (error || !profile) {
     return (
-      <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center", bgcolor: "#0f172a" }}>
-        <Fade in>
-          <Paper sx={{ p: 4, borderRadius: 3 }}>
-            <Typography sx={{ mb: 2 }}>{error}</Typography>
-            <Button variant="contained" onClick={() => { clearToken(); onLogout(); }}>
-              Login again
-            </Button>
-          </Paper>
-        </Fade>
+      <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
+        <Paper sx={{ p: 4 }}>
+          <Typography sx={{ mb: 2 }}>{error}</Typography>
+          <Button
+            variant="contained"
+            onClick={() => {
+              clearToken();
+              onLogout();
+            }}
+          >
+            Login again
+          </Button>
+        </Paper>
       </Box>
     );
   }
 
-  const isAdmin = profile.role === "admin";
+  const isAdmin = profile.accessLevel === 3;
 
-  /* ---------- UI ---------- */
   return (
-    <Fade in timeout={600}>
+    <Fade in>
       <Box sx={{ minHeight: "100vh", bgcolor: "#f1f5f9" }}>
         {/* TOP BAR */}
-        <AppBar
-          position="static"
-          elevation={0}
-          sx={{
-            bgcolor: "#020617",
-            borderBottom: "1px solid #1e293b",
-          }}
-        >
-          <Toolbar sx={{ maxWidth: 1280, mx: "auto", width: "100%" }}>
-            <Typography sx={{ flexGrow: 1, fontWeight: 700, color: "#e5e7eb" }}>
+        <AppBar position="static" elevation={0}>
+          <Toolbar>
+            <Typography sx={{ flexGrow: 1, fontWeight: 700 }}>
               GeoSecureOTP
             </Typography>
 
-            <IconButton
-              sx={{
-                color: "#94a3b8",
-                transition: "0.2s",
-                "&:hover": { color: "#38bdf8", transform: "rotate(90deg)" },
-              }}
-            >
+            <IconButton>
               <RefreshIcon />
             </IconButton>
 
             <IconButton
-              sx={{
-                color: "#94a3b8",
-                transition: "0.2s",
-                "&:hover": { color: "#ef4444" },
-              }}
               onClick={() => {
                 clearToken();
                 onLogout();
@@ -120,136 +98,49 @@ export default function Dashboard({ onLogout }) {
               <LogoutIcon />
             </IconButton>
 
-            <Avatar
-              sx={{
-                ml: 2,
-                bgcolor: isAdmin ? "#2563eb" : "#64748b",
-                transition: "0.3s",
-                "&:hover": { transform: "scale(1.1)" },
-              }}
-            >
+            <Avatar sx={{ ml: 2, bgcolor: isAdmin ? "#2563eb" : "#64748b" }}>
               {isAdmin ? <AdminPanelSettingsIcon /> : <PersonIcon />}
             </Avatar>
           </Toolbar>
         </AppBar>
 
         {/* CONTENT */}
-        <Box sx={{ maxWidth: 1280, mx: "auto", mt: 4, px: 2 }}>
+        <Box sx={{ maxWidth: 1200, mx: "auto", mt: 4 }}>
           {/* PROFILE */}
-          <Slide in direction="up" timeout={500}>
-            <Paper
-              sx={{
-                p: 3,
-                borderRadius: 4,
-                mb: 3,
-                backdropFilter: "blur(10px)",
-                transition: "0.3s",
-                "&:hover": {
-                  transform: "translateY(-4px)",
-                  boxShadow: "0 20px 40px rgba(0,0,0,0.12)",
-                },
-              }}
-            >
-              <Stack direction="row" spacing={2} alignItems="center">
-                <Avatar
-                  sx={{
-                    bgcolor: isAdmin ? "#2563eb" : "#64748b",
-                    width: 48,
-                    height: 48,
-                  }}
-                >
-                  {isAdmin ? <AdminPanelSettingsIcon /> : <PersonIcon />}
-                </Avatar>
+          <Paper sx={{ p: 3, mb: 3 }}>
+            <Typography fontWeight={700}>{profile.email}</Typography>
+            <Typography color="text.secondary">
+              {isAdmin ? "Administrator Access" : "Standard User"}
+            </Typography>
+          </Paper>
 
-                <Box>
-                  <Typography sx={{ fontWeight: 700 }}>
-                    {profile.email}
-                  </Typography>
-                  <Typography sx={{ color: "#475569", fontSize: 14 }}>
-                    {isAdmin ? "Administrator Access" : "Standard User"}
-                  </Typography>
-                </Box>
-              </Stack>
-            </Paper>
-          </Slide>
+          {/* ADMIN SECTION */}
+          {isAdmin && (
+            <Stack spacing={3}>
+              <Paper sx={{ p: 3 }}>
+                <Typography fontWeight={700} mb={2}>
+                  User Management
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+                <AdminCreateUser />
+              </Paper>
 
-          {/* ADMIN */}
-{isAdmin && (
-  <Slide in direction="up" timeout={650}>
-    <Stack spacing={3}>
-      {/* CREATE USER */}
-      <Paper
-        sx={{
-          p: 3,
-          borderRadius: 4,
-          transition: "0.3s",
-          "&:hover": {
-            transform: "translateY(-4px)",
-            boxShadow: "0 20px 40px rgba(0,0,0,0.12)",
-          },
-        }}
-      >
-        <Typography sx={{ fontWeight: 700, mb: 1 }}>
-          User Management
-        </Typography>
-        <Typography sx={{ color: "#64748b", fontSize: 14, mb: 2 }}>
-          Create and manage user accounts
-        </Typography>
-        <Divider sx={{ mb: 3 }} />
-        <AdminCreateUser />
-      </Paper>
-
-      {/* GEO BOUNDARY */}
-      <Paper
-        sx={{
-          p: 3,
-          borderRadius: 4,
-          transition: "0.3s",
-          "&:hover": {
-            transform: "translateY(-4px)",
-            boxShadow: "0 20px 40px rgba(0,0,0,0.12)",
-          },
-        }}
-      >
-        <Typography sx={{ fontWeight: 700, mb: 1 }}>
-          Access Control
-        </Typography>
-        <Typography sx={{ color: "#64748b", fontSize: 14, mb: 2 }}>
-          Configure geographic access rules
-        </Typography>
-        <Divider sx={{ mb: 3 }} />
-        <AdminGeoBoundary />
-      </Paper>
-    </Stack>
-  </Slide>
-)}
-
+              <Paper sx={{ p: 3 }}>
+                <Typography fontWeight={700} mb={2}>
+                  Access Control
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+                <AdminGeoBoundary />
+              </Paper>
+            </Stack>
+          )}
 
           {/* FILES */}
-          <Slide in direction="up" timeout={800}>
-            <Paper
-              sx={{
-                p: 3,
-                borderRadius: 4,
-                transition: "0.3s",
-                "&:hover": {
-                  transform: "translateY(-4px)",
-                  boxShadow: "0 20px 40px rgba(0,0,0,0.12)",
-                },
-              }}
-            >
-              <Typography sx={{ fontWeight: 700, mb: 1 }}>
-                Secure Files
-              </Typography>
-              <Typography sx={{ color: "#64748b", fontSize: 14 }}>
-                Files visible based on your access
-              </Typography>
-              <Divider sx={{ my: 2 }} />
-              <Typography sx={{ color: "#94a3b8" }}>
-                No files available.
-              </Typography>
-            </Paper>
-          </Slide>
+          <Paper sx={{ p: 3, mt: 4 }}>
+            <Typography fontWeight={700}>Secure Files</Typography>
+            <Divider sx={{ my: 2 }} />
+            <Typography>No files available.</Typography>
+          </Paper>
         </Box>
       </Box>
     </Fade>
