@@ -1,8 +1,7 @@
 // ============================================================================
-// GeoSecureOTP - Complete Node.js Backend (FIXED)
+// GeoSecureOTP - Complete Node.js Backend (RBAC FIXED, ADMIN FILE OPS ADDED)
 // ============================================================================
-const multer = require("multer");
-const path = require("path");
+require("dotenv").config();
 
 console.log(">>> Starting GeoSecureOTP Server (debug mode)...");
 
@@ -17,14 +16,7 @@ const sqlite3 = require("sqlite3").verbose();
 const jwt = require("jsonwebtoken");
 const path = require("path");
 const multer = require("multer");
-const storage = multer.diskStorage({
-  destination: "uploads/",
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + "_" + file.originalname);
-  }
-});
-
-const upload = multer({ storage });
+const fs = require("fs");
 
 // --------------------------------------------------------------------------
 // Environment Variables
@@ -107,21 +99,10 @@ db.serialize(() => {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       filename TEXT,
       path TEXT,
+      min_access_level INTEGER,
       active INTEGER DEFAULT 1
     )
   `);
-
-  db.run(`
-CREATE TABLE IF NOT EXISTS files (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  filename TEXT,
-  stored_name TEXT,
-  uploaded_by TEXT,
-  min_access_level INTEGER,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)
-`);
-
 });
 
 // --------------------------------------------------------------------------
@@ -148,7 +129,6 @@ function authMiddleware(req, res, next) {
   }
 }
 
-// Access-level middleware
 function requireLevel(level) {
   return (req, res, next) => {
     if (req.user.accessLevel >= level) next();
@@ -201,7 +181,7 @@ app.post("/send-otp", (req, res) => {
 });
 
 // --------------------------------------------------------------------------
-// VERIFY OTP (FIXED)
+// VERIFY OTP
 // --------------------------------------------------------------------------
 app.post("/verify-otp", (req, res) => {
   const email = req.body.email.toLowerCase();
@@ -219,22 +199,17 @@ app.post("/verify-otp", (req, res) => {
         return res.json({ error: "wrong-otp" });
       }
 
-      // mark ONLY this OTP as used
       db.run("UPDATE otps SET used=1 WHERE rowid=?", [row.rowid]);
 
-      // fetch access level
       db.get(
         "SELECT access_level FROM users WHERE email=?",
         [email],
         (err, user) => {
-          if (!user) return res.status(404).json({ error: "user-not-found" });
-
           const token = jwt.sign(
             { email, accessLevel: user.access_level },
             JWT_SECRET,
             { expiresIn: "2h" }
           );
-
           res.json({ success: true, token });
         }
       );
@@ -243,7 +218,7 @@ app.post("/verify-otp", (req, res) => {
 });
 
 // --------------------------------------------------------------------------
-// PROFILE (JWT ONLY)
+// PROFILE
 // --------------------------------------------------------------------------
 app.get("/profile", authMiddleware, (req, res) => {
   res.json({
@@ -274,26 +249,7 @@ app.post(
 );
 
 // --------------------------------------------------------------------------
-// ADMIN - SET GEO BOUNDARY
-// --------------------------------------------------------------------------
-app.post(
-  "/admin/set-boundary",
-  authMiddleware,
-  requireLevel(ACCESS.ADMIN),
-  (req, res) => {
-    const { lat, lon, radius } = req.body;
-
-    db.run("DELETE FROM boundary");
-    db.run(
-      "INSERT INTO boundary (lat, lon, radius) VALUES (?, ?, ?)",
-      [lat, lon, radius],
-      () => res.json({ success: true })
-    );
-  }
-);
-
-// --------------------------------------------------------------------------
-// FILE UPLOAD (ADMIN)
+// FILE UPLOAD (ADMIN ONLY)
 // --------------------------------------------------------------------------
 const upload = multer({
   storage: multer.diskStorage({
@@ -309,37 +265,93 @@ app.post(
   requireLevel(ACCESS.ADMIN),
   upload.single("file"),
   (req, res) => {
+    const { minAccessLevel } = req.body;
+
     db.run(
-      "INSERT INTO files (filename, path) VALUES (?, ?)",
-      [req.file.originalname, req.file.filename],
+      "INSERT INTO files (filename, path, min_access_level) VALUES (?, ?, ?)",
+      [req.file.originalname, req.file.filename, minAccessLevel],
       () => res.json({ success: true })
     );
   }
 );
 
 // --------------------------------------------------------------------------
-// LIST FILES
+// LIST FILES (RBAC)
 // --------------------------------------------------------------------------
 app.get("/files", authMiddleware, (req, res) => {
-  db.all("SELECT id, filename FROM files WHERE active=1", (err, rows) => {
-    res.json(rows || []);
-  });
+  db.all(
+    "SELECT id, filename, min_access_level FROM files WHERE active=1 AND min_access_level <= ?",
+    [req.user.accessLevel],
+    (err, rows) => res.json(rows || [])
+  );
 });
 
 // --------------------------------------------------------------------------
-// DOWNLOAD FILE (HIGH + ADMIN)
+// DOWNLOAD FILE (RBAC)
 // --------------------------------------------------------------------------
-app.get(
-  "/files/:id/download",
+app.get("/files/:id/download", authMiddleware, (req, res) => {
+  db.get(
+    "SELECT * FROM files WHERE id=? AND active=1",
+    [req.params.id],
+    (err, row) => {
+      if (!row) return res.status(404).end();
+
+      if (req.user.accessLevel < row.min_access_level) {
+        return res.status(403).json({ error: "access-denied" });
+      }
+
+      res.download(
+        path.join(__dirname, "uploads", row.path),
+        row.filename
+      );
+    }
+  );
+});
+
+// --------------------------------------------------------------------------
+// ADMIN - CHANGE FILE ACCESS LEVEL
+// --------------------------------------------------------------------------
+app.put(
+  "/admin/files/:id/access",
   authMiddleware,
-  requireLevel(ACCESS.HIGH),
+  requireLevel(ACCESS.ADMIN),
+  (req, res) => {
+    const { accessLevel } = req.body;
+
+    db.run(
+      "UPDATE files SET min_access_level=? WHERE id=? AND active=1",
+      [accessLevel, req.params.id],
+      function () {
+        if (this.changes === 0)
+          return res.status(404).json({ error: "file-not-found" });
+        res.json({ success: true });
+      }
+    );
+  }
+);
+
+// --------------------------------------------------------------------------
+// ADMIN - DELETE FILE
+// --------------------------------------------------------------------------
+app.delete(
+  "/admin/files/:id",
+  authMiddleware,
+  requireLevel(ACCESS.ADMIN),
   (req, res) => {
     db.get(
-      "SELECT * FROM files WHERE id=?",
+      "SELECT * FROM files WHERE id=? AND active=1",
       [req.params.id],
-      (err, row) => {
-        if (!row) return res.status(404).end();
-        res.download(path.join(__dirname, "uploads", row.path), row.filename);
+      (err, file) => {
+        if (!file)
+          return res.status(404).json({ error: "file-not-found" });
+
+        fs.unlink(path.join(__dirname, "uploads", file.path), () => {
+          db.run(
+            "UPDATE files SET active=0 WHERE id=?",
+            [req.params.id],
+            () => res.json({ success: true })
+          );
+        });
       }
     );
   }
