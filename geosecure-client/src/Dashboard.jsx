@@ -7,8 +7,6 @@ import { API_BASE } from "./config";
 
 import {
   Box,
-  AppBar,
-  Toolbar,
   Typography,
   IconButton,
   Avatar,
@@ -25,16 +23,19 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import PersonIcon from "@mui/icons-material/Person";
 
+import "./dashboard.css";
+
 export default function Dashboard({ onLogout }) {
   const [profile, setProfile] = useState(null);
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  const [activeSection, setActiveSection] = useState("files");
+
   const [openViewer, setOpenViewer] = useState(false);
   const [activeFile, setActiveFile] = useState(null);
 
-  // ---------------- LOAD PROFILE ----------------
   async function loadProfile() {
     try {
       const res = await authedFetch(`${API_BASE}/profile`);
@@ -46,84 +47,85 @@ export default function Dashboard({ onLogout }) {
     }
   }
 
-  // ---------------- LOAD FILES ----------------
   async function loadFiles() {
     const res = await authedFetch(`${API_BASE}/files`);
     if (res.ok) setFiles(res.json);
   }
 
-  // ---------------- VIEW FILE (ALL USERS) ----------------
   async function viewFile(file) {
-    const token = getToken();
-
-    const res = await fetch(`${API_BASE}/files/${file.id}/download`, {
-      headers: { Authorization: "Bearer " + token },
-    });
-
-    if (!res.ok) {
-      alert("Unauthorized");
-      return;
-    }
-
-    const blob = await res.blob();
-    const ext = file.filename.split(".").pop().toLowerCase();
-    const url = URL.createObjectURL(blob);
-
-    let textContent = null;
-    if (["xml", "txt"].includes(ext)) {
-      textContent = await blob.text();
-    }
-
-    setActiveFile({ ...file, ext, url, textContent });
-    setOpenViewer(true);
+  if (!navigator.geolocation) {
+    return alert("Geolocation not supported");
   }
 
-  // ---------------- ADMIN: CHANGE ACCESS ----------------
+  navigator.geolocation.getCurrentPosition(
+    async (pos) => {
+      const token = getToken();
+
+      const res = await fetch(
+        `${API_BASE}/files/${file.id}/download`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer " + token,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            lat: pos.coords.latitude,
+            lon: pos.coords.longitude,
+          }),
+        }
+      );
+
+      if (!res.ok) {
+        const err = await res.json();
+        return alert(
+          err.error === "outside-allowed-location"
+            ? "Access denied: Outside allowed location"
+            : "Unauthorized"
+        );
+      }
+
+      const blob = await res.blob();
+      const ext = file.filename.split(".").pop().toLowerCase();
+      const url = URL.createObjectURL(blob);
+
+      let textContent = null;
+      if (["xml", "txt"].includes(ext)) {
+        textContent = await blob.text();
+      }
+
+      setActiveFile({ ...file, ext, url, textContent });
+      setOpenViewer(true);
+    },
+    () => alert("Location permission denied")
+  );
+}
+
+
   async function changeAccess(file) {
     const level = prompt(
       "Enter access level:\n1 = User\n2 = Manager\n3 = Admin",
       file.accessLevel || 1
     );
-
     if (!level) return;
 
     const res = await authedFetch(
       `${API_BASE}/admin/files/${file.id}/access`,
-      {
-        method: "PUT",
-        body: { accessLevel: Number(level) },
-      }
+      { method: "PUT", body: { accessLevel: Number(level) } }
     );
 
-    if (res.ok) {
-      alert("Access updated successfully");
-      loadFiles();
-    } else {
-      alert("Failed to update access");
-    }
+    if (res.ok) loadFiles();
   }
 
-  // ---------------- ADMIN: DELETE FILE ----------------
   async function deleteFile(file) {
-    const ok = window.confirm(
-      `Are you sure you want to delete "${file.filename}"?`
-    );
-    if (!ok) return;
-
+    if (!window.confirm(`Delete "${file.filename}"?`)) return;
     const res = await authedFetch(
       `${API_BASE}/admin/files/${file.id}`,
       { method: "DELETE" }
     );
-
-    if (res.ok) {
-      alert("File deleted");
-      loadFiles();
-    } else {
-      alert("Delete failed");
-    }
+    if (res.ok) loadFiles();
   }
 
-  // ---------------- INIT ----------------
   useEffect(() => {
     (async () => {
       await loadProfile();
@@ -132,28 +134,20 @@ export default function Dashboard({ onLogout }) {
     })();
   }, []);
 
-  // ---------------- LOADING ----------------
   if (loading) {
     return (
-      <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
+      <Box className="center">
         <CircularProgress />
       </Box>
     );
   }
 
-  // ---------------- ERROR ----------------
   if (error || !profile) {
     return (
-      <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
-        <Paper sx={{ p: 4 }}>
+      <Box className="center">
+        <Paper className="glass-card">
           <Typography sx={{ mb: 2 }}>{error}</Typography>
-          <Button
-            variant="contained"
-            onClick={() => {
-              clearToken();
-              onLogout();
-            }}
-          >
+          <Button variant="contained" onClick={onLogout}>
             Login again
           </Button>
         </Paper>
@@ -165,98 +159,94 @@ export default function Dashboard({ onLogout }) {
 
   return (
     <Fade in>
-      <Box sx={{ minHeight: "100vh", bgcolor: "#f1f5f9" }}>
-        {/* TOP BAR */}
-        <AppBar position="static" elevation={0}>
-          <Toolbar>
-            <Typography sx={{ flexGrow: 1, fontWeight: 700 }}>
-              GeoSecureOTP
-            </Typography>
+      <Box className="dashboard-grid">
+        {/* LEFT NAV (20%) */}
+        <aside className="sidebar glass">
+          <Typography variant="h6">GeoSecureOTP</Typography>
 
+          <div className="profile-mini">
+            <Avatar>
+              {isAdmin ? <AdminPanelSettingsIcon /> : <PersonIcon />}
+            </Avatar>
+            <div>
+              <strong>{profile.email}</strong>
+              <div className="muted">
+                {isAdmin ? "Admin" : "User"}
+              </div>
+            </div>
+          </div>
+
+          <button onClick={() => setActiveSection("files")}>
+            📁 Files
+          </button>
+
+          {isAdmin && (
+            <>
+              <button onClick={() => setActiveSection("create")}>
+                👤 Create User
+              </button>
+              <button onClick={() => setActiveSection("geo")}>
+                📍 Geo Boundary
+              </button>
+              <button onClick={() => setActiveSection("upload")}>
+                ⬆ Upload File
+              </button>
+            </>
+          )}
+
+          <div className="nav-footer">
             <IconButton onClick={loadFiles}>
               <RefreshIcon />
             </IconButton>
-
-            <IconButton
-              onClick={() => {
-                clearToken();
-                onLogout();
-              }}
-            >
+            <IconButton onClick={onLogout}>
               <LogoutIcon />
             </IconButton>
+          </div>
+        </aside>
 
-            <Avatar sx={{ ml: 2 }}>
-              {isAdmin ? <AdminPanelSettingsIcon /> : <PersonIcon />}
-            </Avatar>
-          </Toolbar>
-        </AppBar>
-
-        <Box sx={{ maxWidth: 1200, mx: "auto", mt: 4 }}>
-          {/* PROFILE */}
-          <Paper sx={{ p: 3, mb: 3 }}>
-            <Typography fontWeight={700}>{profile.email}</Typography>
-            <Typography color="text.secondary">
-              {isAdmin ? "Administrator Access" : "Standard User"}
-            </Typography>
-          </Paper>
-
-          {/* ADMIN MODULES */}
-          {isAdmin && (
-            <Stack spacing={3}>
-              <Paper sx={{ p: 3 }}>
-                <AdminCreateUser />
-              </Paper>
-
-              <Paper sx={{ p: 3 }}>
-                <AdminGeoBoundary />
-              </Paper>
-
-              <Paper sx={{ p: 3 }}>
-                <AdminFileUpload onUploaded={loadFiles} />
-              </Paper>
-            </Stack>
+        {/* RIGHT CONTENT (80%) */}
+        <main className="content">
+          {activeSection === "create" && isAdmin && (
+            <Paper className="glass-card">
+              <AdminCreateUser />
+            </Paper>
           )}
 
-          {/* FILE LIST */}
-          <Paper sx={{ p: 3, mt: 4 }}>
-            <Typography fontWeight={700}>Secure Files</Typography>
-            <Divider sx={{ my: 2 }} />
+          {activeSection === "geo" && isAdmin && (
+            <Paper className="glass-card">
+              <AdminGeoBoundary />
+            </Paper>
+          )}
 
-            {files.length === 0 ? (
-              <Typography>No files available.</Typography>
-            ) : (
+          {activeSection === "upload" && isAdmin && (
+            <Paper className="glass-card">
+              <AdminFileUpload onUploaded={loadFiles} />
+            </Paper>
+          )}
+
+          {activeSection === "files" && (
+            <Paper className="glass-card">
+              <Typography fontWeight={700}>Secure Files</Typography>
+              <Divider sx={{ my: 2 }} />
+
               <Stack spacing={2}>
                 {files.map((f) => (
-                  <Paper
-                    key={f.id}
-                    sx={{
-                      p: 2,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 2,
-                    }}
-                  >
+                  <Paper key={f.id} className="glass-file">
                     <Typography sx={{ flexGrow: 1 }}>
                       {f.filename}
                     </Typography>
 
-                    <Button variant="outlined" onClick={() => viewFile(f)}>
-                      View
-                    </Button>
+                    <Button onClick={() => viewFile(f)}>View</Button>
 
                     {isAdmin && (
                       <>
                         <Button
-                          variant="outlined"
                           color="warning"
                           onClick={() => changeAccess(f)}
                         >
-                          Change Access
+                          Access
                         </Button>
-
                         <Button
-                          variant="contained"
                           color="error"
                           onClick={() => deleteFile(f)}
                         >
@@ -267,61 +257,27 @@ export default function Dashboard({ onLogout }) {
                   </Paper>
                 ))}
               </Stack>
-            )}
-          </Paper>
-        </Box>
+            </Paper>
+          )}
+        </main>
 
         {/* FILE VIEWER */}
         {openViewer && activeFile && (
-          <Box
-            sx={{
-              position: "fixed",
-              inset: 0,
-              bgcolor: "rgba(0,0,0,0.85)",
-              zIndex: 9999,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Box sx={{ width: "80%", height: "80%", bgcolor: "#000", p: 2 }}>
+          <div className="viewer-overlay">
+            <div className="viewer">
               {activeFile.ext === "pdf" && (
-                <iframe
-                  src={`${activeFile.url}#toolbar=0`}
-                  width="100%"
-                  height="100%"
-                />
+                <iframe src={activeFile.url} />
               )}
-
               {["png", "jpg", "jpeg", "gif", "webp"].includes(
                 activeFile.ext
-              ) && (
-                <img
-                  src={activeFile.url}
-                  style={{
-                    maxWidth: "100%",
-                    maxHeight: "100%",
-                    display: "block",
-                    margin: "auto",
-                  }}
-                />
-              )}
-
+              ) && <img src={activeFile.url} />}
               {["xml", "txt"].includes(activeFile.ext) && (
-                <pre
-                  style={{
-                    color: "white",
-                    overflow: "auto",
-                    height: "100%",
-                  }}
-                >
-                  {activeFile.textContent}
-                </pre>
+                <pre>{activeFile.textContent}</pre>
               )}
-            </Box>
+            </div>
 
             <Button
-              sx={{ position: "absolute", top: 20, right: 20 }}
+              className="viewer-close"
               variant="contained"
               onClick={() => {
                 URL.revokeObjectURL(activeFile.url);
@@ -331,7 +287,7 @@ export default function Dashboard({ onLogout }) {
             >
               Close
             </Button>
-          </Box>
+          </div>
         )}
       </Box>
     </Fade>

@@ -1,0 +1,198 @@
+import React, { useEffect, useState } from "react";
+import AdminCreateUser from "./AdminCreateUser";
+import AdminGeoBoundary from "./AdminGeoBoundary";
+import AdminFileUpload from "./AdminFileUpload";
+import { authedFetch, clearToken, getToken } from "./auth";
+import { API_BASE } from "./config";
+import "./dashboard.css";
+
+export default function Dashboard({ onLogout }) {
+  const [profile, setProfile] = useState(null);
+  const [files, setFiles] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [section, setSection] = useState("files"); // home = files
+  const [openFolder, setOpenFolder] = useState(null);
+
+  async function loadProfile() {
+    const res = await authedFetch(`${API_BASE}/profile`);
+    if (!res.ok) {
+      clearToken();
+      onLogout();
+      return;
+    }
+    setProfile(res.json);
+  }
+
+  async function loadFiles() {
+    const res = await authedFetch(`${API_BASE}/files`);
+    if (res.ok) setFiles(res.json);
+  }
+
+  async function viewFile(file) {
+    const token = getToken();
+    const res = await fetch(
+      `${API_BASE}/files/${file.id}/download`,
+      { headers: { Authorization: "Bearer " + token } }
+    );
+    if (!res.ok) return alert("Unauthorized");
+    const blob = await res.blob();
+    window.open(URL.createObjectURL(blob), "_blank");
+  }
+
+  async function changeAccess(file) {
+    const level = prompt("Enter access level (1 / 2 / 3)", file.accessLevel || 1);
+    if (!level) return;
+
+    const res = await authedFetch(
+      `${API_BASE}/admin/files/${file.id}/access`,
+      {
+        method: "PUT",
+        body: { accessLevel: Number(level) },
+      }
+    );
+
+    if (res.ok) loadFiles();
+    else alert("Failed to update access");
+  }
+
+  async function deleteFile(file) {
+    if (!window.confirm(`Delete "${file.filename}"?`)) return;
+    const res = await authedFetch(
+      `${API_BASE}/admin/files/${file.id}`,
+      { method: "DELETE" }
+    );
+    if (res.ok) loadFiles();
+  }
+
+  useEffect(() => {
+    (async () => {
+      await loadProfile();
+      await loadFiles();
+      setLoading(false);
+    })();
+  }, []);
+
+  if (loading) {
+    return <div className="loading-screen">Loading Dashboard…</div>;
+  }
+
+  const isAdmin = profile.accessLevel === 3;
+
+  /* ---------- FOLDER LOGIC ---------- */
+  const folders = {};
+  files.forEach((f) => {
+    const parts = f.filename.split("/");
+    const folder = parts.length > 1 ? parts[0] : "Root";
+    if (!folders[folder]) folders[folder] = [];
+    folders[folder].push(f);
+  });
+
+  return (
+    <div className="dashboard-root">
+      {/* SIDEBAR */}
+      <aside className="sidebar">
+        <h2>GeoSecureOTP</h2>
+        <p className="role">{isAdmin ? "ADMIN" : "USER"}</p>
+
+        <button onClick={() => setSection("files")}>📁 Files</button>
+
+        {isAdmin && (
+          <>
+            <button onClick={() => setSection("create")}>👤 Create User</button>
+            <button onClick={() => setSection("geo")}>📍 Geo Boundary</button>
+            <button onClick={() => setSection("upload")}>⬆ Upload File</button>
+          </>
+        )}
+
+        <button
+          className="logout"
+          onClick={() => {
+            clearToken();
+            onLogout();
+          }}
+        >
+          ⏻ Logout
+        </button>
+      </aside>
+
+      {/* MAIN CONTENT */}
+      <main className="content">
+        {/* PROFILE */}
+        <div className="glass top-card">
+          <h3>{profile.email}</h3>
+          <span>{isAdmin ? "Administrator Access" : "Standard User"}</span>
+        </div>
+
+        {/* ADMIN SECTIONS */}
+        {section === "create" && isAdmin && (
+          <div className="glass section">
+            <h2>Create User</h2>
+            <AdminCreateUser />
+          </div>
+        )}
+
+        {section === "geo" && isAdmin && (
+          <div className="glass section">
+            <h2>Geo Boundary</h2>
+            <AdminGeoBoundary />
+          </div>
+        )}
+
+        {section === "upload" && isAdmin && (
+          <div className="glass section">
+            <h2>Upload File</h2>
+            <AdminFileUpload onUploaded={loadFiles} />
+            <p className="muted" style={{ marginTop: 10 }}>
+              Tip: Use folder/file.pdf to upload into folders
+            </p>
+          </div>
+        )}
+
+        {/* FILES HOME */}
+        {section === "files" && (
+          <div className="glass section">
+            <h2>Secure Files</h2>
+
+            {Object.keys(folders).map((folder) => (
+              <div key={folder} style={{ marginTop: 20 }}>
+                <h3
+                  style={{ cursor: "pointer" }}
+                  onClick={() =>
+                    setOpenFolder(openFolder === folder ? null : folder)
+                  }
+                >
+                  📂 {folder}
+                </h3>
+
+                {openFolder === folder &&
+                  folders[folder].map((f) => (
+                    <div className="file-card" key={f.id}>
+                      <span>{f.filename.split("/").pop()}</span>
+
+                      <div>
+                        <button onClick={() => viewFile(f)}>View</button>
+
+                        {isAdmin && (
+                          <>
+                            <button onClick={() => changeAccess(f)}>
+                              Access
+                            </button>
+                            <button
+                              className="danger"
+                              onClick={() => deleteFile(f)}
+                            >
+                              Delete
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            ))}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}

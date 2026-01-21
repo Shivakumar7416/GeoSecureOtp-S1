@@ -1,5 +1,5 @@
 // ============================================================================
-// GeoSecureOTP - Complete Node.js Backend (RBAC FIXED, ADMIN FILE OPS ADDED)
+// GeoSecureOTP - Complete Node.js Backend (RBAC + GEO LOCATION ENFORCED)
 // ============================================================================
 require("dotenv").config();
 
@@ -137,7 +137,26 @@ function requireLevel(level) {
 }
 
 // --------------------------------------------------------------------------
-// OTP Helpers
+// GEO UTILITY
+// --------------------------------------------------------------------------
+function distanceMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = (v) => (v * Math.PI) / 180;
+
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) ** 2;
+
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// --------------------------------------------------------------------------
+// OTP HELPERS
 // --------------------------------------------------------------------------
 function generateOtp() {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -249,7 +268,53 @@ app.post(
 );
 
 // --------------------------------------------------------------------------
-// FILE UPLOAD (ADMIN ONLY)
+// ADMIN - SAVE GEO BOUNDARY (MAIN)
+// --------------------------------------------------------------------------
+app.post(
+  "/admin/geo-boundary",
+  authMiddleware,
+  requireLevel(ACCESS.ADMIN),
+  (req, res) => {
+    const { lat, lon, radius } = req.body;
+    if (!lat || !lon || !radius)
+      return res.status(400).json({ error: "invalid-data" });
+
+    db.serialize(() => {
+      db.run("DELETE FROM boundary");
+      db.run(
+        "INSERT INTO boundary (lat, lon, radius) VALUES (?, ?, ?)",
+        [lat, lon, radius],
+        () => res.json({ success: true })
+      );
+    });
+  }
+);
+
+// --------------------------------------------------------------------------
+// ADMIN - SAVE GEO BOUNDARY (ALIAS FOR OLD FRONTEND)
+// --------------------------------------------------------------------------
+app.post(
+  "/admin/set-boundary",
+  authMiddleware,
+  requireLevel(ACCESS.ADMIN),
+  (req, res) => {
+    const { lat, lon, radius } = req.body;
+    if (!lat || !lon || !radius)
+      return res.status(400).json({ error: "invalid-data" });
+
+    db.serialize(() => {
+      db.run("DELETE FROM boundary");
+      db.run(
+        "INSERT INTO boundary (lat, lon, radius) VALUES (?, ?, ?)",
+        [lat, lon, radius],
+        () => res.json({ success: true })
+      );
+    });
+  }
+);
+
+// --------------------------------------------------------------------------
+// FILE UPLOAD (ADMIN)
 // --------------------------------------------------------------------------
 const upload = multer({
   storage: multer.diskStorage({
@@ -266,7 +331,6 @@ app.post(
   upload.single("file"),
   (req, res) => {
     const { minAccessLevel } = req.body;
-
     db.run(
       "INSERT INTO files (filename, path, min_access_level) VALUES (?, ?, ?)",
       [req.file.originalname, req.file.filename, minAccessLevel],
@@ -276,7 +340,7 @@ app.post(
 );
 
 // --------------------------------------------------------------------------
-// LIST FILES (RBAC)
+// LIST FILES
 // --------------------------------------------------------------------------
 app.get("/files", authMiddleware, (req, res) => {
   db.all(
@@ -287,48 +351,43 @@ app.get("/files", authMiddleware, (req, res) => {
 });
 
 // --------------------------------------------------------------------------
-// DOWNLOAD FILE (RBAC)
+// DOWNLOAD FILE (RBAC + GEO)
 // --------------------------------------------------------------------------
-app.get("/files/:id/download", authMiddleware, (req, res) => {
-  db.get(
-    "SELECT * FROM files WHERE id=? AND active=1",
-    [req.params.id],
-    (err, row) => {
-      if (!row) return res.status(404).end();
+app.post("/files/:id/download", authMiddleware, (req, res) => {
+  const { lat, lon } = req.body;
+  if (!lat || !lon)
+    return res.status(400).json({ error: "location-required" });
 
-      if (req.user.accessLevel < row.min_access_level) {
-        return res.status(403).json({ error: "access-denied" });
-      }
+  db.get("SELECT * FROM boundary LIMIT 1", [], (err, boundary) => {
+    if (!boundary)
+      return res.status(403).json({ error: "geo-not-configured" });
 
-      res.download(
-        path.join(__dirname, "uploads", row.path),
-        row.filename
-      );
-    }
-  );
-});
+    const dist = distanceMeters(
+      lat,
+      lon,
+      boundary.lat,
+      boundary.lon
+    );
 
-// --------------------------------------------------------------------------
-// ADMIN - CHANGE FILE ACCESS LEVEL
-// --------------------------------------------------------------------------
-app.put(
-  "/admin/files/:id/access",
-  authMiddleware,
-  requireLevel(ACCESS.ADMIN),
-  (req, res) => {
-    const { accessLevel } = req.body;
+    if (dist > boundary.radius)
+      return res.status(403).json({ error: "outside-allowed-location" });
 
-    db.run(
-      "UPDATE files SET min_access_level=? WHERE id=? AND active=1",
-      [accessLevel, req.params.id],
-      function () {
-        if (this.changes === 0)
-          return res.status(404).json({ error: "file-not-found" });
-        res.json({ success: true });
+    db.get(
+      "SELECT * FROM files WHERE id=? AND active=1",
+      [req.params.id],
+      (err, file) => {
+        if (!file) return res.status(404).end();
+        if (req.user.accessLevel < file.min_access_level)
+          return res.status(403).json({ error: "access-denied" });
+
+        res.download(
+          path.join(__dirname, "uploads", file.path),
+          file.filename
+        );
       }
     );
-  }
-);
+  });
+});
 
 // --------------------------------------------------------------------------
 // ADMIN - DELETE FILE
