@@ -62,9 +62,10 @@ export default function AdminCreateUser() {
         onChange={(e) => setAccessLevel(Number(e.target.value))}
         sx={{ mb: 2 }}
       >
-        <MenuItem value={1}>Lower User</MenuItem>
-        <MenuItem value={2}>Middle User</MenuItem>
-        <MenuItem value={3}>Admin</MenuItem>
+        <MenuItem value={1}>Employee</MenuItem>
+<MenuItem value={2}>Manager</MenuItem>
+<MenuItem value={3}>Administrator</MenuItem>
+
       </TextField>
 
       <Button variant="contained" onClick={handleCreate} sx={{ fontWeight: 700 }}>

@@ -1,0 +1,122 @@
+/* FULL PAGE */
+.otp-page {
+  min-height: 100vh;
+  background: radial-gradient(circle at top, #0f172a, #020617);
+  color: #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 40px 16px;
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+/* HEADER */
+.otp-header {
+  text-align: center;
+  max-width: 800px;
+}
+
+.otp-header h1 {
+  font-size: 3.2rem;
+  font-weight: 800;
+  color: #38bdf8;
+  margin-bottom: 6px;
+}
+
+.otp-header h3 {
+  font-weight: 500;
+  color: #cbd5f5;
+  margin-bottom: 16px;
+}
+
+.otp-header p {
+  color: #94a3b8;
+  line-height: 1.6;
+  font-size: 0.95rem;
+}
+
+/* CARD */
+.otp-card {
+  width: 100%;
+  max-width: 420px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 18px;
+  padding: 28px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(14px);
+}
+
+.otp-card h2 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.otp-card .sub {
+  margin: 6px 0 18px;
+  font-size: 0.85rem;
+  color: #94a3b8;
+}
+
+/* INPUT */
+.otp-card input {
+  width: 100%;
+  padding: 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: #020617;
+  color: #e5e7eb;
+  font-size: 1rem;
+  outline: none;
+}
+
+.otp-card input::placeholder {
+  color: #64748b;
+}
+
+.otp-card input:focus {
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.25);
+}
+
+/* BUTTON */
+.otp-card button {
+  width: 100%;
+  margin-top: 18px;
+  padding: 14px;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #2563eb, #38bdf8);
+  color: white;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: 0.25s;
+}
+
+.otp-card button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 14px 40px rgba(37, 99, 235, 0.45);
+}
+
+.otp-card button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* MESSAGE */
+.msg {
+  margin-top: 14px;
+  font-size: 0.85rem;
+  color: #38bdf8;
+  text-align: center;
+}
+
+/* FOOTER */
+footer {
+  font-size: 0.75rem;
+  color: #64748b;
+  text-align: center;
+  margin-top: 30px;
+}

@@ -1,31 +1,22 @@
-// src/VerifyOtpMui.jsx
 import React, { useState } from "react";
 import { API_BASE } from "./config";
 import { saveToken } from "./auth";
-
-import {
-  Box,
-  Paper,
-  Typography,
-  TextField,
-  Button,
-  CircularProgress,
-  Snackbar,
-  IconButton,
-} from "@mui/material";
-
-import CloseIcon from "@mui/icons-material/Close";
-import KeyIcon from "@mui/icons-material/Key";
+import "./requestOtp.css"; // reuse SAME CSS
 
 export default function VerifyOtp({ email, onSuccess }) {
   const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
-  const [snack, setSnack] = useState({ open: false, message: "" });
+  const [msg, setMsg] = useState("");
 
-  async function handleVerify(e) {
+  async function verifyOtp(e) {
     e.preventDefault();
+    if (!otp) {
+      setMsg("Please enter the OTP");
+      return;
+    }
+
     setLoading(true);
-    setSnack({ open: false, message: "" });
+    setMsg("");
 
     try {
       const res = await fetch(`${API_BASE}/verify-otp`, {
@@ -36,159 +27,67 @@ export default function VerifyOtp({ email, onSuccess }) {
 
       const data = await res.json();
 
-      if (data.success && data.token) {
-        // ✅ Save JWT
+      if (res.ok && data.success && data.token) {
         saveToken(data.token);
+        setMsg("OTP verified. Logging in...");
 
-        // ✅ Show success message
-        setSnack({
-          open: true,
-          message: "OTP Verified — Logging in...",
-        });
-
-        // ✅ Force reload so new JWT is applied everywhere
         setTimeout(() => {
           onSuccess();
           window.location.reload();
-        }, 800);
+        }, 700);
       } else {
-        setSnack({
-          open: true,
-          message: "Invalid OTP. Try again.",
-        });
+        setMsg("Invalid OTP. Please try again.");
       }
-    } catch (err) {
-      setSnack({
-        open: true,
-        message: "Network error: " + err.message,
-      });
+    } catch {
+      setMsg("Server error while verifying OTP");
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <>
-      <Box sx={{ display: "flex", justifyContent: "center", px: 2, py: 6 }}>
-        <Paper
-          elevation={10}
-          sx={{
-            width: "100%",
-            maxWidth: 420,
-            borderRadius: 3,
-            p: 4,
-            bgcolor: "#ffffff",
-            boxShadow: "0 12px 35px rgba(0,0,0,0.08)",
-            border: "1px solid rgba(0,0,0,0.06)",
-            transition: ".2s",
-            "&:hover": { transform: "translateY(-4px)" },
-          }}
-        >
-          {/* Header */}
-          <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 3 }}>
-            <KeyIcon sx={{ fontSize: 36, color: "#2563eb" }} />
-            <Typography variant="h6" sx={{ fontWeight: 700, color: "#0f172a" }}>
-              Enter OTP to verify
-            </Typography>
-          </Box>
+    <div className="otp-page">
+      {/* HEADER */}
+      <div className="otp-header">
+        <h1>GeoSecureOTP</h1>
+        <h3>OTP Verification</h3>
+        <p>
+          A One-Time Password has been sent to
+          <br />
+          <strong>{email}</strong>
+        </p>
+      </div>
 
-          <Typography sx={{ mb: 2, color: "#475569" }}>
-            OTP sent to <strong>{email}</strong>
-          </Typography>
+      {/* CARD */}
+      <form className="otp-card" onSubmit={verifyOtp}>
+        <h2>Enter OTP</h2>
+        <p className="sub">
+          Enter the 6-digit OTP received in your email
+        </p>
 
-          {/* Form */}
-          <Box
-            component="form"
-            onSubmit={handleVerify}
-            sx={{ display: "grid", gap: 2 }}
-          >
-            <TextField
-              label="6-digit OTP"
-              required
-              fullWidth
-              disabled={loading}
-              value={otp}
-              onChange={(e) => setOtp(e.target.value)}
-              sx={{
-                "& .MuiOutlinedInput-root": {
-                  borderRadius: 2,
-                  bgcolor: "#f8fafc",
-                  border: "1px solid rgba(0,0,0,0.08)",
-                },
-                "& .MuiOutlinedInput-root.Mui-focused": {
-                  borderColor: "#2563eb",
-                  boxShadow: "0 0 0 4px rgba(37,99,235,0.15)",
-                },
-              }}
-            />
+        <input
+          type="text"
+          inputMode="numeric"
+          maxLength={6}
+          placeholder="Enter 6-digit OTP"
+          value={otp}
+          onChange={(e) =>
+            setOtp(e.target.value.replace(/\D/g, ""))
+          }
+          disabled={loading}
+        />
 
-            <Button
-              type="submit"
-              variant="contained"
-              disabled={loading}
-              sx={{
-                py: 1.25,
-                mt: 1,
-                borderRadius: 2,
-                fontWeight: 700,
-                fontSize: "1rem",
-                textTransform: "none",
-                background: "linear-gradient(135deg,#2563eb,#38bdf8)",
-                color: "#fff",
-                boxShadow: "0 8px 25px rgba(37,99,235,0.25)",
-                "&:hover": {
-                  background: "linear-gradient(135deg,#1d4ed8,#0ea5e9)",
-                  boxShadow: "0 12px 30px rgba(37,99,235,0.35)",
-                  transform: "translateY(-2px)",
-                },
-              }}
-            >
-              {loading ? (
-                <>
-                  <CircularProgress size={18} sx={{ color: "#fff", mr: 1 }} />
-                  Verifying...
-                </>
-              ) : (
-                "Verify & Login"
-              )}
-            </Button>
-          </Box>
-        </Paper>
-      </Box>
+        <button disabled={loading}>
+          {loading ? "Verifying..." : "Verify OTP"}
+        </button>
 
-      {/* Snackbar */}
-      <Snackbar
-        open={snack.open}
-        autoHideDuration={4200}
-        onClose={() => setSnack((s) => ({ ...s, open: false }))}
-        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
-      >
-        <Paper
-          elevation={6}
-          sx={{
-            display: "flex",
-            alignItems: "center",
-            gap: 1,
-            px: 2,
-            py: 1,
-            bgcolor: "#2563eb",
-            color: "#fff",
-            minWidth: 240,
-            borderRadius: 2,
-          }}
-        >
-          <Typography sx={{ flex: 1, fontSize: 13 }}>
-            {snack.message}
-          </Typography>
-          <IconButton
-            size="small"
-            onClick={() => setSnack((s) => ({ ...s, open: false }))}
-            sx={{ color: "#fff" }}
-          >
-            <CloseIcon fontSize="small" />
-          </IconButton>
-        </Paper>
-      </Snackbar>
-    </>
+        {msg && <div className="msg">{msg}</div>}
+      </form>
+
+      {/* FOOTER */}
+      <footer>
+        Secure Authentication using OTP & Geolocation
+      </footer>
+    </div>
   );
 }

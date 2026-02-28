@@ -12,6 +12,11 @@ export function getToken() {
 export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
 }
+// src/auth.js
+// export function removeToken() {
+//   localStorage.removeItem("token");
+// }
+
 
 // Fetch wrapper that adds Authorization if token exists
 export async function authedFetch(url, opts = {}) {
@@ -30,5 +35,5 @@ export async function authedFetch(url, opts = {}) {
   } else {
     const text = await res.text();
     return { ok: res.ok, status: res.status, text };
-  }
+  }     
 }

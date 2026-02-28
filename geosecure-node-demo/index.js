@@ -1,13 +1,9 @@
 // ============================================================================
-// GeoSecureOTP - Complete Node.js Backend (RBAC + GEO LOCATION ENFORCED)
+// GeoSecureOTP - Backend (Original Code + Added Features ONLY)
 // ============================================================================
+
 require("dotenv").config();
 
-console.log(">>> Starting GeoSecureOTP Server (debug mode)...");
-
-// --------------------------------------------------------------------------
-// Imports
-// --------------------------------------------------------------------------
 const express = require("express");
 const cors = require("cors");
 const nodemailer = require("nodemailer");
@@ -19,57 +15,40 @@ const multer = require("multer");
 const fs = require("fs");
 
 // --------------------------------------------------------------------------
-// Environment Variables
+// Config
 // --------------------------------------------------------------------------
 const PORT = 4000;
 const GMAIL_EMAIL = process.env.GMAIL_EMAIL;
 const GMAIL_APP_PASS = process.env.GMAIL_APP_PASS;
 const JWT_SECRET = process.env.JWT_SECRET || "temp_jwt_secret";
 
+// --------------------------------------------------------------------------
 // Access Levels
+// --------------------------------------------------------------------------
 const ACCESS = {
-  LOW: 1,
-  HIGH: 2,
+  EMPLOYEE: 1,
+  MANAGER: 2,
   ADMIN: 3,
 };
 
 // --------------------------------------------------------------------------
-// Validate ENV
+// App
 // --------------------------------------------------------------------------
-if (!GMAIL_EMAIL || !GMAIL_APP_PASS) {
-  console.error("❌ Gmail credentials missing");
-  process.exit(1);
-}
+const app = express();
+app.use(cors());
+app.use(express.json());
 
 // --------------------------------------------------------------------------
-// Mailer
+// DB
 // --------------------------------------------------------------------------
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: { user: GMAIL_EMAIL, pass: GMAIL_APP_PASS },
-});
+const db = new sqlite3.Database(path.join(__dirname, "otp.db"));
 
-// --------------------------------------------------------------------------
-// Database
-// --------------------------------------------------------------------------
-const DB_PATH = path.join(__dirname, "otp.db");
-
-const db = new sqlite3.Database(DB_PATH, (err) => {
-  if (err) {
-    console.error("❌ DB open failed", err);
-    process.exit(1);
-  }
-  console.log("✓ SQLite DB connected at:", DB_PATH);
-});
-
-// --------------------------------------------------------------------------
-// Create Tables
-// --------------------------------------------------------------------------
 db.serialize(() => {
   db.run(`
     CREATE TABLE IF NOT EXISTS users (
       email TEXT PRIMARY KEY,
       access_level INTEGER DEFAULT 1,
+      enabled INTEGER DEFAULT 1,
       created_at INTEGER
     )
   `);
@@ -99,6 +78,7 @@ db.serialize(() => {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       filename TEXT,
       path TEXT,
+      owner_email TEXT,
       min_access_level INTEGER,
       active INTEGER DEFAULT 1
     )
@@ -106,11 +86,12 @@ db.serialize(() => {
 });
 
 // --------------------------------------------------------------------------
-// Express App
+// Mail
 // --------------------------------------------------------------------------
-const app = express();
-app.use(cors());
-app.use(express.json());
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: { user: GMAIL_EMAIL, pass: GMAIL_APP_PASS },
+});
 
 // --------------------------------------------------------------------------
 // JWT Middleware
@@ -122,8 +103,19 @@ function authMiddleware(req, res, next) {
   }
 
   try {
-    req.user = jwt.verify(auth.split(" ")[1], JWT_SECRET);
-    next();
+    const decoded = jwt.verify(auth.split(" ")[1], JWT_SECRET);
+
+    db.get(
+      "SELECT enabled FROM users WHERE email=?",
+      [decoded.email],
+      (err, row) => {
+        if (!row || row.enabled === 0) {
+          return res.status(403).json({ error: "user-disabled" });
+        }
+        req.user = decoded;
+        next();
+      }
+    );
   } catch {
     return res.status(401).json({ error: "invalid-token" });
   }
@@ -137,12 +129,19 @@ function requireLevel(level) {
 }
 
 // --------------------------------------------------------------------------
-// GEO UTILITY
+// Helpers
 // --------------------------------------------------------------------------
+function generateOtp() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+function hashOtp(otp, salt) {
+  return crypto.createHmac("sha256", salt).update(otp).digest("hex");
+}
+
 function distanceMeters(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const toRad = (v) => (v * Math.PI) / 180;
-
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
 
@@ -153,17 +152,6 @@ function distanceMeters(lat1, lon1, lat2, lon2) {
       Math.sin(dLon / 2) ** 2;
 
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-// --------------------------------------------------------------------------
-// OTP HELPERS
-// --------------------------------------------------------------------------
-function generateOtp() {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
-
-function hashOtp(otp, salt) {
-  return crypto.createHmac("sha256", salt).update(otp).digest("hex");
 }
 
 // --------------------------------------------------------------------------
@@ -185,17 +173,14 @@ app.post("/send-otp", (req, res) => {
       [email, hash, salt, expires, Date.now()]
     );
 
-    try {
-      await transporter.sendMail({
-        from: `GeoSecureOTP <${GMAIL_EMAIL}>`,
-        to: email,
-        subject: "Your OTP",
-        text: `Your OTP is ${otp}`,
-      });
-      res.json({ success: true });
-    } catch {
-      res.json({ error: "email-failed" });
-    }
+    await transporter.sendMail({
+      from: `GeoSecureOTP <${GMAIL_EMAIL}>`,
+      to: email,
+      subject: "Your OTP",
+      text: `Your OTP is ${otp}`,
+    });
+
+    res.json({ success: true });
   });
 });
 
@@ -203,7 +188,7 @@ app.post("/send-otp", (req, res) => {
 // VERIFY OTP
 // --------------------------------------------------------------------------
 app.post("/verify-otp", (req, res) => {
-  const email = req.body.email.toLowerCase();
+  const email = (req.body.email || "").trim().toLowerCase();
   const otp = req.body.otp;
 
   db.get(
@@ -240,10 +225,20 @@ app.post("/verify-otp", (req, res) => {
 // PROFILE
 // --------------------------------------------------------------------------
 app.get("/profile", authMiddleware, (req, res) => {
-  res.json({
-    email: req.user.email,
-    accessLevel: req.user.accessLevel,
-  });
+  db.get(
+    "SELECT access_level FROM users WHERE email=?",
+    [req.user.email],
+    (err, row) => {
+      if (!row) {
+        return res.status(404).json({ error: "user-not-found" });
+      }
+
+      res.json({
+        email: req.user.email,
+        accessLevel: row.access_level, // 🔥 LIVE ROLE FROM DB
+      });
+    }
+  );
 });
 
 // --------------------------------------------------------------------------
@@ -268,30 +263,56 @@ app.post(
 );
 
 // --------------------------------------------------------------------------
-// ADMIN - SAVE GEO BOUNDARY (MAIN)
+// ADMIN - VIEW USERS
 // --------------------------------------------------------------------------
-app.post(
-  "/admin/geo-boundary",
+app.get(
+  "/admin/users",
   authMiddleware,
   requireLevel(ACCESS.ADMIN),
   (req, res) => {
-    const { lat, lon, radius } = req.body;
-    if (!lat || !lon || !radius)
-      return res.status(400).json({ error: "invalid-data" });
-
-    db.serialize(() => {
-      db.run("DELETE FROM boundary");
-      db.run(
-        "INSERT INTO boundary (lat, lon, radius) VALUES (?, ?, ?)",
-        [lat, lon, radius],
-        () => res.json({ success: true })
-      );
-    });
+    db.all(
+      "SELECT email, access_level, enabled, created_at FROM users",
+      [],
+      (err, rows) => res.json(rows || [])
+    );
   }
 );
 
 // --------------------------------------------------------------------------
-// ADMIN - SAVE GEO BOUNDARY (ALIAS FOR OLD FRONTEND)
+// ADMIN - ENABLE / DISABLE / ROLE
+// --------------------------------------------------------------------------
+app.put("/admin/users/:email/disable", authMiddleware, requireLevel(ACCESS.ADMIN),
+  (req, res) => {
+    db.run("UPDATE users SET enabled=0 WHERE email=?", [req.params.email],
+      () => res.json({ success: true })
+    );
+  }
+);
+
+app.put("/admin/users/:email/enable", authMiddleware, requireLevel(ACCESS.ADMIN),
+  (req, res) => {
+    db.run("UPDATE users SET enabled=1 WHERE email=?", [req.params.email],
+      () => res.json({ success: true })
+    );
+  }
+);
+
+app.put("/admin/users/:email/role", authMiddleware, requireLevel(ACCESS.ADMIN),
+  (req, res) => {
+    const { accessLevel } = req.body;
+    if (![1, 2, 3].includes(accessLevel))
+      return res.status(400).json({ error: "invalid-role" });
+
+    db.run(
+      "UPDATE users SET access_level=? WHERE email=?",
+      [accessLevel, req.params.email],
+      () => res.json({ success: true })
+    );
+  }
+);
+
+// --------------------------------------------------------------------------
+// GEO BOUNDARY
 // --------------------------------------------------------------------------
 app.post(
   "/admin/set-boundary",
@@ -299,8 +320,6 @@ app.post(
   requireLevel(ACCESS.ADMIN),
   (req, res) => {
     const { lat, lon, radius } = req.body;
-    if (!lat || !lon || !radius)
-      return res.status(400).json({ error: "invalid-data" });
 
     db.serialize(() => {
       db.run("DELETE FROM boundary");
@@ -314,7 +333,7 @@ app.post(
 );
 
 // --------------------------------------------------------------------------
-// FILE UPLOAD (ADMIN)
+// FILE UPLOAD
 // --------------------------------------------------------------------------
 const upload = multer({
   storage: multer.diskStorage({
@@ -327,48 +346,82 @@ const upload = multer({
 app.post(
   "/admin/upload-file",
   authMiddleware,
-  requireLevel(ACCESS.ADMIN),
+  requireLevel(ACCESS.MANAGER),
   upload.single("file"),
   (req, res) => {
     const { minAccessLevel } = req.body;
+
     db.run(
-      "INSERT INTO files (filename, path, min_access_level) VALUES (?, ?, ?)",
-      [req.file.originalname, req.file.filename, minAccessLevel],
+      "INSERT INTO files (filename, path, owner_email, min_access_level) VALUES (?, ?, ?, ?)",
+      [req.file.originalname, req.file.filename, req.user.email, minAccessLevel],
       () => res.json({ success: true })
     );
   }
 );
 
+
 // --------------------------------------------------------------------------
-// LIST FILES
+// ADMIN - CHANGE FILE ACCESS LEVEL
+// --------------------------------------------------------------------------
+app.put(
+  "/admin/files/:id/access",
+  authMiddleware,
+  requireLevel(ACCESS.ADMIN),
+  (req, res) => {
+    const { accessLevel } = req.body;
+
+    if (![ACCESS.EMPLOYEE, ACCESS.MANAGER, ACCESS.ADMIN].includes(accessLevel)) {
+      return res.status(400).json({ error: "invalid-access-level" });
+    }
+
+    db.run(
+      "UPDATE files SET min_access_level=? WHERE id=?",
+      [accessLevel, req.params.id],
+      function () {
+        if (this.changes === 0) {
+          return res.status(404).json({ error: "file-not-found" });
+        }
+        res.json({ success: true });
+      }
+    );
+  }
+);
+
+// --------------------------------------------------------------------------
+// LIST FILES (FINAL ACCESS RULE)
 // --------------------------------------------------------------------------
 app.get("/files", authMiddleware, (req, res) => {
-  db.all(
-    "SELECT id, filename, min_access_level FROM files WHERE active=1 AND min_access_level <= ?",
-    [req.user.accessLevel],
-    (err, rows) => res.json(rows || [])
-  );
+  if (req.user.accessLevel === ACCESS.ADMIN) {
+    db.all(
+      "SELECT id, filename, min_access_level FROM files WHERE active=1",
+      [],
+      (err, rows) => res.json(rows || [])
+    );
+  } else {
+    db.all(
+      `SELECT id, filename, min_access_level FROM files
+       WHERE active=1
+       AND (
+         owner_email = ?
+         OR min_access_level = ?
+       )`,
+      [req.user.email, req.user.accessLevel],
+      (err, rows) => res.json(rows || [])
+    );
+  }
 });
 
 // --------------------------------------------------------------------------
-// DOWNLOAD FILE (RBAC + GEO)
+// DOWNLOAD FILE (FINAL ACCESS RULE)
 // --------------------------------------------------------------------------
 app.post("/files/:id/download", authMiddleware, (req, res) => {
   const { lat, lon } = req.body;
-  if (!lat || !lon)
-    return res.status(400).json({ error: "location-required" });
 
   db.get("SELECT * FROM boundary LIMIT 1", [], (err, boundary) => {
     if (!boundary)
       return res.status(403).json({ error: "geo-not-configured" });
 
-    const dist = distanceMeters(
-      lat,
-      lon,
-      boundary.lat,
-      boundary.lon
-    );
-
+    const dist = distanceMeters(lat, lon, boundary.lat, boundary.lon);
     if (dist > boundary.radius)
       return res.status(403).json({ error: "outside-allowed-location" });
 
@@ -377,8 +430,14 @@ app.post("/files/:id/download", authMiddleware, (req, res) => {
       [req.params.id],
       (err, file) => {
         if (!file) return res.status(404).end();
-        if (req.user.accessLevel < file.min_access_level)
-          return res.status(403).json({ error: "access-denied" });
+
+        if (
+          req.user.accessLevel !== ACCESS.ADMIN &&
+          file.owner_email !== req.user.email &&
+          file.min_access_level !== req.user.accessLevel
+        ) {
+          return res.status(403).json({ error: "not-allowed" });
+        }
 
         res.download(
           path.join(__dirname, "uploads", file.path),
@@ -390,35 +449,8 @@ app.post("/files/:id/download", authMiddleware, (req, res) => {
 });
 
 // --------------------------------------------------------------------------
-// ADMIN - DELETE FILE
-// --------------------------------------------------------------------------
-app.delete(
-  "/admin/files/:id",
-  authMiddleware,
-  requireLevel(ACCESS.ADMIN),
-  (req, res) => {
-    db.get(
-      "SELECT * FROM files WHERE id=? AND active=1",
-      [req.params.id],
-      (err, file) => {
-        if (!file)
-          return res.status(404).json({ error: "file-not-found" });
-
-        fs.unlink(path.join(__dirname, "uploads", file.path), () => {
-          db.run(
-            "UPDATE files SET active=0 WHERE id=?",
-            [req.params.id],
-            () => res.json({ success: true })
-          );
-        });
-      }
-    );
-  }
-);
-
-// --------------------------------------------------------------------------
-// START SERVER
+// START
 // --------------------------------------------------------------------------
 app.listen(PORT, () => {
-  console.log(`>>> GeoSecureOTP running at http://localhost:${PORT}`);
+  console.log(`GeoSecureOTP running at http://localhost:${PORT}`);
 });
