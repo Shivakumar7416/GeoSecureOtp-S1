@@ -83,6 +83,21 @@ db.serialize(() => {
       active INTEGER DEFAULT 1
     )
   `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS access_logs (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_email TEXT,
+      file_id    INTEGER,
+      filename   TEXT,
+      lat        REAL,
+      lon        REAL,
+      ip         TEXT,
+      status     TEXT,
+      reason     TEXT,
+      timestamp  INTEGER
+    )
+  `);
 });
 
 // --------------------------------------------------------------------------
@@ -152,6 +167,33 @@ function distanceMeters(lat1, lon1, lat2, lon2) {
       Math.sin(dLon / 2) ** 2;
 
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function getClientIp(req) {
+  return (
+    req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
+    req.socket?.remoteAddress ||
+    "unknown"
+  );
+}
+
+function insertLog({ userEmail, fileId, filename, lat, lon, ip, status, reason }) {
+  db.run(
+    `INSERT INTO access_logs
+       (user_email, file_id, filename, lat, lon, ip, status, reason, timestamp)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      userEmail,
+      fileId   || null,
+      filename || null,
+      lat      || null,
+      lon      || null,
+      ip,
+      status,
+      reason   || null,
+      Date.now(),
+    ]
+  );
 }
 
 // --------------------------------------------------------------------------
@@ -416,14 +458,28 @@ app.get("/files", authMiddleware, (req, res) => {
 // --------------------------------------------------------------------------
 app.post("/files/:id/download", authMiddleware, (req, res) => {
   const { lat, lon } = req.body;
+  const ip = getClientIp(req);
 
   db.get("SELECT * FROM boundary LIMIT 1", [], (err, boundary) => {
-    if (!boundary)
+    if (!boundary) {
+      insertLog({
+        userEmail: req.user.email, fileId: req.params.id,
+        lat, lon, ip, status: "denied", reason: "geo-not-configured",
+      });
       return res.status(403).json({ error: "geo-not-configured" });
+    }
 
     const dist = distanceMeters(lat, lon, boundary.lat, boundary.lon);
-    if (dist > boundary.radius)
+    if (dist > boundary.radius) {
+      db.get("SELECT filename FROM files WHERE id=?", [req.params.id], (err2, f) => {
+        insertLog({
+          userEmail: req.user.email, fileId: req.params.id,
+          filename: f?.filename, lat, lon, ip,
+          status: "denied", reason: "outside-allowed-location",
+        });
+      });
       return res.status(403).json({ error: "outside-allowed-location" });
+    }
 
     db.get(
       "SELECT * FROM files WHERE id=? AND active=1",
@@ -436,8 +492,19 @@ app.post("/files/:id/download", authMiddleware, (req, res) => {
           file.owner_email !== req.user.email &&
           file.min_access_level !== req.user.accessLevel
         ) {
+          insertLog({
+            userEmail: req.user.email, fileId: file.id,
+            filename: file.filename, lat, lon, ip,
+            status: "denied", reason: "not-allowed",
+          });
           return res.status(403).json({ error: "not-allowed" });
         }
+
+        insertLog({
+          userEmail: req.user.email, fileId: file.id,
+          filename: file.filename, lat, lon, ip,
+          status: "success", reason: null,
+        });
 
         res.download(
           path.join(__dirname, "uploads", file.path),
@@ -447,6 +514,63 @@ app.post("/files/:id/download", authMiddleware, (req, res) => {
     );
   });
 });
+
+// --------------------------------------------------------------------------
+// ADMIN - DELETE FILE
+// --------------------------------------------------------------------------
+app.delete(
+  "/admin/files/:id",
+  authMiddleware,
+  requireLevel(ACCESS.ADMIN),
+  (req, res) => {
+    db.run(
+      "UPDATE files SET active=0 WHERE id=?",
+      [req.params.id],
+      function () {
+        if (this.changes === 0)
+          return res.status(404).json({ error: "file-not-found" });
+        res.json({ success: true });
+      }
+    );
+  }
+);
+
+// --------------------------------------------------------------------------
+// ADMIN - ACCESS LOGS
+// --------------------------------------------------------------------------
+app.get(
+  "/admin/logs",
+  authMiddleware,
+  requireLevel(ACCESS.ADMIN),
+  (req, res) => {
+    const limit  = parseInt(req.query.limit)  || 200;
+    const filter = req.query.filter || "all";
+
+    let where = "";
+    if (filter === "denied")  where = "WHERE status='denied'";
+    if (filter === "success") where = "WHERE status='success'";
+
+    db.all(
+      `SELECT * FROM access_logs ${where} ORDER BY timestamp DESC LIMIT ?`,
+      [limit],
+      (err, rows) => res.json(rows || [])
+    );
+  }
+);
+
+app.get(
+  "/admin/logs/unread-count",
+  authMiddleware,
+  requireLevel(ACCESS.ADMIN),
+  (req, res) => {
+    const since = parseInt(req.query.since) || 0;
+    db.get(
+      "SELECT COUNT(*) as count FROM access_logs WHERE timestamp > ? AND status='denied'",
+      [since],
+      (err, row) => res.json({ count: row?.count || 0 })
+    );
+  }
+);
 
 // --------------------------------------------------------------------------
 // START
