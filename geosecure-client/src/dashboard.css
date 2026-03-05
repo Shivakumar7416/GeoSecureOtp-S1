@@ -27,6 +27,7 @@
 
 body {
   font-family: 'Sora', sans-serif;
+  font-size: 13px; /* base scale-down so Sora matches original size feel */
   background: var(--bg-base);
   color: var(--text-primary);
   margin: 0;
@@ -54,7 +55,7 @@ body {
 }
 
 .sidebar-logo {
-  font-size: 0.85rem;
+  font-size: 0.78rem;
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -96,7 +97,7 @@ body {
 
 .profile-mini strong {
   display: block;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   font-weight: 600;
   color: var(--text-primary);
   white-space: nowrap;
@@ -106,7 +107,7 @@ body {
 }
 
 .profile-mini .muted {
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   color: var(--accent);
   font-weight: 500;
   letter-spacing: 0.04em;
@@ -115,7 +116,7 @@ body {
 
 /* ── NAV SECTION LABEL ── */
 .nav-label {
-  font-size: 0.65rem;
+  font-size: 0.6rem;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -129,11 +130,11 @@ body {
   border: 1px solid transparent;
   color: var(--text-secondary);
   text-align: left;
-  padding: 10px 12px;
+  padding: 9px 12px;
   border-radius: var(--radius-sm);
   cursor: pointer;
   font-family: 'Sora', sans-serif;
-  font-size: 0.82rem;
+  font-size: 0.76rem;
   font-weight: 500;
   display: flex;
   align-items: center;
@@ -224,14 +225,14 @@ body {
 }
 
 .card-title {
-  font-size: 0.95rem;
+  font-size: 0.88rem;
   font-weight: 700;
   color: var(--text-primary);
   letter-spacing: 0.01em;
 }
 
 .card-subtitle {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   color: var(--text-secondary);
   margin-top: 2px;
 }
@@ -327,12 +328,12 @@ body {
 .MuiTextField-root .MuiOutlinedInput-root {
   border-radius: var(--radius-sm) !important;
   font-family: 'Sora', sans-serif !important;
-  font-size: 0.85rem !important;
+  font-size: 0.8rem !important;
 }
 
 .MuiButton-root {
   font-family: 'Sora', sans-serif !important;
-  font-size: 0.8rem !important;
+  font-size: 0.75rem !important;
   border-radius: var(--radius-sm) !important;
   text-transform: none !important;
   font-weight: 600 !important;
@@ -340,12 +341,131 @@ body {
 
 .MuiChip-root {
   font-family: 'Sora', sans-serif !important;
-  font-size: 0.72rem !important;
+  font-size: 0.68rem !important;
   font-weight: 600 !important;
   border-radius: 6px !important;
-  height: 26px !important;
+  height: 24px !important;
 }
 
 .MuiDivider-root {
   border-color: var(--border) !important;
 }
+
+.MuiInputLabel-root {
+  font-size: 0.8rem !important;
+  font-family: 'Sora', sans-serif !important;
+}
+
+.MuiMenuItem-root {
+  font-size: 0.8rem !important;
+  font-family: 'Sora', sans-serif !important;
+}
+
+/* ── SECURE VIEWER — Anti-screenshot / anti-print protections ── */
+
+/* Block entire viewer from printing */
+@media print {
+  .viewer-overlay,
+  .viewer,
+  .viewer-overlay * {
+    display: none !important;
+    visibility: hidden !important;
+  }
+  body::after {
+    content: "This document is protected and cannot be printed.";
+    display: block;
+    font-family: sans-serif;
+    font-size: 1.2rem;
+    color: #333;
+    text-align: center;
+    margin-top: 40vh;
+  }
+}
+
+/* Disable text selection everywhere inside viewer */
+.viewer,
+.viewer * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+
+/* Disable image drag */
+.viewer img {
+  pointer-events: none !important;
+  -webkit-user-drag: none !important;
+  user-drag: none !important;
+}
+
+/* Overlay filter to discourage camera-based screenshots */
+.viewer-overlay {
+  /* subtle dynamic noise makes camera capture less clean */
+  background: rgba(0, 0, 0, 0.92) !important;
+}
+
+/* ── LIGHT THEME ─────────────────────────────────────────────────────────── */
+body.light-theme {
+  --bg-base:     #f0f4f8;
+  --bg-surface:  #ffffff;
+  --bg-elevated: #f8fafc;
+  --bg-hover:    #eef2f7;
+  --border:      rgba(59,130,246,0.15);
+  --border-active: rgba(59,130,246,0.4);
+  --accent-soft: rgba(59,130,246,0.08);
+  --text-primary:   #0f172a;
+  --text-secondary: #475569;
+  --text-muted:     #94a3b8;
+}
+
+body.light-theme .dashboard-grid {
+  background: var(--bg-base);
+  color: var(--text-primary);
+}
+
+body.light-theme .glass {
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  border-right: 1px solid var(--border);
+}
+
+body.light-theme .glass-card {
+  background: #ffffff !important;
+  border: 1px solid rgba(59,130,246,0.12) !important;
+  box-shadow: 0 2px 16px rgba(0,0,0,0.06) !important;
+}
+
+body.light-theme .glass-file {
+  background: #f8fafc !important;
+  border: 1px solid rgba(59,130,246,0.12) !important;
+}
+
+body.light-theme .glass-file:hover {
+  background: #eef2f7 !important;
+  border-color: rgba(59,130,246,0.3) !important;
+}
+
+body.light-theme .sidebar button {
+  color: #475569;
+}
+
+body.light-theme .sidebar button:hover,
+body.light-theme .sidebar button.active {
+  color: #1d4ed8;
+  background: rgba(59,130,246,0.08);
+}
+
+body.light-theme .profile-mini {
+  background: #f1f5f9;
+  border: 1px solid rgba(59,130,246,0.12);
+}
+
+body.light-theme .content {
+  background: var(--bg-base);
+}
+
+body.light-theme .card-title { color: #0f172a; }
+body.light-theme .card-subtitle { color: #64748b; }
+body.light-theme .nav-label { color: #94a3b8; }
+body.light-theme .muted { color: #64748b; }
+body.light-theme .sidebar-logo { color: #1d4ed8; }

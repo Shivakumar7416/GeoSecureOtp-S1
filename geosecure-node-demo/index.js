@@ -39,6 +39,22 @@ app.use(cors());
 app.use(express.json());
 
 // --------------------------------------------------------------------------
+// Security Headers — disable screen capture, embedding, sniffing
+// --------------------------------------------------------------------------
+app.use((req, res, next) => {
+  // Block browser-level screen capture API where supported
+  res.setHeader("Permissions-Policy", "screen-wake-lock=(), display-capture=()");
+  // Prevent clickjacking / iframe embedding
+  res.setHeader("X-Frame-Options", "DENY");
+  // Prevent MIME sniffing
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  // No caching of sensitive responses
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+  res.setHeader("Pragma", "no-cache");
+  next();
+});
+
+// --------------------------------------------------------------------------
 // DB
 // --------------------------------------------------------------------------
 const db = new sqlite3.Database(path.join(__dirname, "otp.db"));
@@ -98,6 +114,41 @@ db.serialize(() => {
       timestamp  INTEGER
     )
   `);
+
+  // Login activity log
+  db.run(`
+    CREATE TABLE IF NOT EXISTS login_logs (
+      id        INTEGER PRIMARY KEY AUTOINCREMENT,
+      email     TEXT,
+      event     TEXT,
+      ip        TEXT,
+      timestamp INTEGER
+    )
+  `);
+
+  // OTP attempt tracking for brute-force lockout
+  db.run(`
+    CREATE TABLE IF NOT EXISTS otp_attempts (
+      email      TEXT PRIMARY KEY,
+      attempts   INTEGER DEFAULT 0,
+      locked_until INTEGER DEFAULT 0
+    )
+  `);
+
+  // Folders
+  db.run(`
+    CREATE TABLE IF NOT EXISTS folders (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      name       TEXT NOT NULL,
+      icon       TEXT DEFAULT 'folder',
+      color      TEXT DEFAULT '#3b82f6',
+      created_by TEXT,
+      created_at INTEGER
+    )
+  `);
+
+  // Add folder_id to files if column doesn't exist yet (safe migration)
+  db.run(`ALTER TABLE files ADD COLUMN folder_id INTEGER DEFAULT NULL`, () => {});
 });
 
 // --------------------------------------------------------------------------
@@ -196,33 +247,94 @@ function insertLog({ userEmail, fileId, filename, lat, lon, ip, status, reason }
   );
 }
 
+function insertLoginLog({ email, event, ip }) {
+  db.run(
+    `INSERT INTO login_logs (email, event, ip, timestamp) VALUES (?, ?, ?, ?)`,
+    [email, event, ip, Date.now()]
+  );
+}
+
+// OTP brute-force helpers
+const OTP_MAX_ATTEMPTS = 5;
+const OTP_LOCKOUT_MS   = 15 * 60 * 1000; // 15 minutes
+
+function checkLockout(email, cb) {
+  db.get("SELECT * FROM otp_attempts WHERE email=?", [email], (err, row) => {
+    if (!row) return cb(false, 0);
+    if (row.locked_until > Date.now()) return cb(true, row.locked_until);
+    cb(false, row.attempts);
+  });
+}
+
+function recordFailedAttempt(email) {
+  db.get("SELECT * FROM otp_attempts WHERE email=?", [email], (err, row) => {
+    const attempts = (row?.attempts || 0) + 1;
+    const lockedUntil = attempts >= OTP_MAX_ATTEMPTS
+      ? Date.now() + OTP_LOCKOUT_MS : 0;
+
+    if (row) {
+      db.run(
+        "UPDATE otp_attempts SET attempts=?, locked_until=? WHERE email=?",
+        [attempts, lockedUntil, email]
+      );
+    } else {
+      db.run(
+        "INSERT INTO otp_attempts (email, attempts, locked_until) VALUES (?,?,?)",
+        [email, attempts, lockedUntil]
+      );
+    }
+  });
+}
+
+function clearAttempts(email) {
+  db.run("UPDATE otp_attempts SET attempts=0, locked_until=0 WHERE email=?", [email]);
+}
+
 // --------------------------------------------------------------------------
 // SEND OTP
 // --------------------------------------------------------------------------
 app.post("/send-otp", (req, res) => {
   const email = (req.body.email || "").trim().toLowerCase();
+  const ip    = getClientIp(req);
 
   db.get("SELECT * FROM users WHERE email=?", [email], async (err, user) => {
-    if (!user) return res.json({ error: "email-not-registered" });
+    if (!user) {
+      insertLoginLog({ email, event: "otp-request-unknown-email", ip });
+      return res.json({ error: "email-not-registered" });
+    }
 
-    const otp = generateOtp();
-    const salt = crypto.randomBytes(16).toString("hex");
-    const hash = hashOtp(otp, salt);
-    const expires = Date.now() + 5 * 60 * 1000;
+    // Check lockout
+    checkLockout(email, async (locked, lockedUntil) => {
+      if (locked) {
+        const mins = Math.ceil((lockedUntil - Date.now()) / 60000);
+        insertLoginLog({ email, event: "otp-request-locked", ip });
+        return res.status(429).json({
+          error: "account-locked",
+          message: `Too many attempts. Try again in ${mins} minute(s).`,
+          lockedUntil,
+        });
+      }
 
-    db.run(
-      "INSERT INTO otps (email, hash, salt, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
-      [email, hash, salt, expires, Date.now()]
-    );
+      const otp     = generateOtp();
+      const salt    = crypto.randomBytes(16).toString("hex");
+      const hash    = hashOtp(otp, salt);
+      const expires = Date.now() + 5 * 60 * 1000;
 
-    await transporter.sendMail({
-      from: `GeoSecureOTP <${GMAIL_EMAIL}>`,
-      to: email,
-      subject: "Your OTP",
-      text: `Your OTP is ${otp}`,
+      db.run(
+        "INSERT INTO otps (email, hash, salt, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
+        [email, hash, salt, expires, Date.now()]
+      );
+
+      await transporter.sendMail({
+        from: `GeoSecureOTP <${GMAIL_EMAIL}>`,
+        to: email,
+        subject: "Your OTP",
+        text: `Your OTP is ${otp}`,
+      });
+
+      insertLoginLog({ email, event: "otp-sent", ip });
+      res.json({ success: true });
     });
-
-    res.json({ success: true });
   });
 });
 
@@ -231,36 +343,68 @@ app.post("/send-otp", (req, res) => {
 // --------------------------------------------------------------------------
 app.post("/verify-otp", (req, res) => {
   const email = (req.body.email || "").trim().toLowerCase();
-  const otp = req.body.otp;
+  const otp   = req.body.otp;
+  const ip    = getClientIp(req);
 
-  db.get(
-    "SELECT rowid,* FROM otps WHERE email=? ORDER BY created_at DESC LIMIT 1",
-    [email],
-    (err, row) => {
-      if (!row || row.used || Date.now() > row.expires_at) {
-        return res.json({ error: "otp-invalid" });
-      }
-
-      if (hashOtp(otp, row.salt) !== row.hash) {
-        return res.json({ error: "wrong-otp" });
-      }
-
-      db.run("UPDATE otps SET used=1 WHERE rowid=?", [row.rowid]);
-
-      db.get(
-        "SELECT access_level FROM users WHERE email=?",
-        [email],
-        (err, user) => {
-          const token = jwt.sign(
-            { email, accessLevel: user.access_level },
-            JWT_SECRET,
-            { expiresIn: "2h" }
-          );
-          res.json({ success: true, token });
-        }
-      );
+  // Check lockout first
+  checkLockout(email, (locked, lockedUntil) => {
+    if (locked) {
+      const mins = Math.ceil((lockedUntil - Date.now()) / 60000);
+      insertLoginLog({ email, event: "verify-blocked-locked", ip });
+      return res.status(429).json({
+        error: "account-locked",
+        message: `Too many attempts. Try again in ${mins} minute(s).`,
+        lockedUntil,
+      });
     }
-  );
+
+    db.get(
+      "SELECT rowid,* FROM otps WHERE email=? ORDER BY created_at DESC LIMIT 1",
+      [email],
+      (err, row) => {
+        if (!row || row.used || Date.now() > row.expires_at) {
+          insertLoginLog({ email, event: "verify-fail-expired", ip });
+          return res.json({ error: "otp-invalid" });
+        }
+
+        if (hashOtp(otp, row.salt) !== row.hash) {
+          recordFailedAttempt(email);
+          insertLoginLog({ email, event: "verify-fail-wrong-otp", ip });
+
+          // Check if now locked after this attempt
+          checkLockout(email, (nowLocked, lockedUntil2) => {
+            if (nowLocked) {
+              return res.status(429).json({
+                error: "account-locked",
+                message: "Too many wrong attempts. Account locked for 15 minutes.",
+                lockedUntil: lockedUntil2,
+              });
+            }
+            return res.json({ error: "wrong-otp" });
+          });
+          return;
+        }
+
+        // Success — clear attempts, mark OTP used
+        clearAttempts(email);
+        db.run("UPDATE otps SET used=1 WHERE rowid=?", [row.rowid]);
+
+        db.get(
+          "SELECT access_level FROM users WHERE email=?",
+          [email],
+          (err, user) => {
+            const token = jwt.sign(
+              { email, accessLevel: user.access_level },
+              JWT_SECRET,
+              { expiresIn: "2h" }
+            );
+            insertLoginLog({ email, event: "login-success", ip });
+            res.json({ success: true, token });
+          }
+        );
+      }
+    );
+  });
 });
 
 // --------------------------------------------------------------------------
@@ -391,11 +535,11 @@ app.post(
   requireLevel(ACCESS.MANAGER),
   upload.single("file"),
   (req, res) => {
-    const { minAccessLevel } = req.body;
+    const { minAccessLevel, folderId } = req.body;
 
     db.run(
-      "INSERT INTO files (filename, path, owner_email, min_access_level) VALUES (?, ?, ?, ?)",
-      [req.file.originalname, req.file.filename, req.user.email, minAccessLevel],
+      "INSERT INTO files (filename, path, owner_email, min_access_level, folder_id) VALUES (?, ?, ?, ?, ?)",
+      [req.file.originalname, req.file.filename, req.user.email, minAccessLevel, folderId || null],
       () => res.json({ success: true })
     );
   }
@@ -571,6 +715,94 @@ app.get(
     );
   }
 );
+
+// --------------------------------------------------------------------------
+// ADMIN - LOGIN LOGS
+// --------------------------------------------------------------------------
+app.get(
+  "/admin/login-logs",
+  authMiddleware,
+  requireLevel(ACCESS.ADMIN),
+  (req, res) => {
+    const limit = parseInt(req.query.limit) || 200;
+    db.all(
+      "SELECT * FROM login_logs ORDER BY timestamp DESC LIMIT ?",
+      [limit],
+      (err, rows) => res.json(rows || [])
+    );
+  }
+);
+
+// --------------------------------------------------------------------------
+// FOLDERS — CRUD
+// --------------------------------------------------------------------------
+app.get("/admin/folders", authMiddleware, requireLevel(ACCESS.ADMIN), (req, res) => {
+  db.all("SELECT * FROM folders ORDER BY name ASC", [], (err, rows) => res.json(rows || []));
+});
+
+app.get("/folders", authMiddleware, (req, res) => {
+  db.all("SELECT * FROM folders ORDER BY name ASC", [], (err, rows) => res.json(rows || []));
+});
+
+app.post("/admin/folders", authMiddleware, requireLevel(ACCESS.ADMIN), (req, res) => {
+  const { name, icon, color } = req.body;
+  if (!name) return res.status(400).json({ error: "name-required" });
+  db.run(
+    "INSERT INTO folders (name, icon, color, created_by, created_at) VALUES (?,?,?,?,?)",
+    [name, icon || "folder", color || "#3b82f6", req.user.email, Date.now()],
+    function (err) {
+      if (err) return res.status(409).json({ error: "exists" });
+      res.json({ success: true, id: this.lastID });
+    }
+  );
+});
+
+app.put("/admin/folders/:id", authMiddleware, requireLevel(ACCESS.ADMIN), (req, res) => {
+  const { name, icon, color } = req.body;
+  db.run(
+    "UPDATE folders SET name=?, icon=?, color=? WHERE id=?",
+    [name, icon, color, req.params.id],
+    () => res.json({ success: true })
+  );
+});
+
+app.delete("/admin/folders/:id", authMiddleware, requireLevel(ACCESS.ADMIN), (req, res) => {
+  // Unassign files in this folder first
+  db.run("UPDATE files SET folder_id=NULL WHERE folder_id=?", [req.params.id]);
+  db.run("DELETE FROM folders WHERE id=?", [req.params.id], () => res.json({ success: true }));
+});
+
+// Assign file to folder
+app.put("/admin/files/:id/folder", authMiddleware, requireLevel(ACCESS.ADMIN), (req, res) => {
+  const { folderId } = req.body;
+  db.run(
+    "UPDATE files SET folder_id=? WHERE id=?",
+    [folderId || null, req.params.id],
+    () => res.json({ success: true })
+  );
+});
+
+// List files with folder info
+app.get("/files/with-folders", authMiddleware, (req, res) => {
+  if (req.user.accessLevel === ACCESS.ADMIN) {
+    db.all(
+      `SELECT f.*, fo.name as folder_name, fo.color as folder_color, fo.icon as folder_icon
+       FROM files f LEFT JOIN folders fo ON f.folder_id = fo.id
+       WHERE f.active=1 ORDER BY fo.name ASC, f.filename ASC`,
+      [],
+      (err, rows) => res.json(rows || [])
+    );
+  } else {
+    db.all(
+      `SELECT f.*, fo.name as folder_name, fo.color as folder_color, fo.icon as folder_icon
+       FROM files f LEFT JOIN folders fo ON f.folder_id = fo.id
+       WHERE f.active=1 AND (f.owner_email=? OR f.min_access_level=?)
+       ORDER BY fo.name ASC, f.filename ASC`,
+      [req.user.email, req.user.accessLevel],
+      (err, rows) => res.json(rows || [])
+    );
+  }
+});
 
 // --------------------------------------------------------------------------
 // START
